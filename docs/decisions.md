@@ -257,5 +257,41 @@
 - All workspace tests pass: **56 tests passed, 0 failed**.
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass cleanly.
 
+## Phase 8: Per-App Validation and Release (2026-10-11)
+
+### 1. Release Binary Optimization
+- **Decision:** Built production release binary via `cargo build --release`.
+- **Metrics:**
+  - Standalone binary size: `9.1 MB` (`target/release/pfmt`).
+  - Zero external runtime shared-library dependencies beyond macOS libSystem/Security framework.
+  - Bundled SQLite, regex, JSON schema generation, and Groq/Jev networking.
+
+### 2. Multi-Agent Validation Matrix
+- Tested 4 target coding environments across 3 realistic developer prompt archetypes (Bug fix with errors, New feature request, Refactoring with candidate files):
+  1. **Antigravity (`--app Antigravity`):**
+     - Prompt: *"Fix the SQLite database lock panic in crates/history/src/db.rs: sqlite3_step returned busy timeout after 5000ms"*
+     - Result: Exit code 0, enhanced via `openai/gpt-oss-120b`, strictly formatted XML with verbatim paths and testable criteria.
+  2. **OpenCode (`--app OpenCode`):**
+     - Prompt: *"Add support for export to markdown in daily logs with --format md flag"*
+     - Result: Exit code 0, enhanced via `openai/gpt-oss-120b`, contextual command extraction (`cargo test`, `cargo clippy`).
+  3. **Freebuff (`--app Freebuff`):**
+     - Prompt: *"Refactor parse_and_validate in crates/llm/src/groq.rs to use clean_json_str and reduce code duplication"*
+     - Result: Exit code 0, preserved exact candidate file paths and function identifiers.
+  4. **Hermes (`--app Hermes`):**
+     - Prompt: *"Optimize prompt formatting performance to under 200ms. Make sure we never use regex for simple string prefix checks."*
+     - Result: Exit code 0, derived acceptance criteria and rules.
+
+### 3. Log Review & Replay Verification
+- `pfmt review` successfully aggregated the 6 real enhancement runs with 100% success rate, 0% degradation, and precise latency distribution.
+- `pfmt replay` verified reproducibility on a live log, replaying the SQLite bugfix prompt and verifying matching output schema with latency improvement (2781ms vs 5666ms).
+
+### 4. Exit Check Results
+- Release binary compiled and verified: `target/release/pfmt` (9.1M).
+- `target/release/pfmt doctor` reports all checks passing `[PASS]`.
+- All 56 workspace tests pass: `cargo test --workspace -- --test-threads=1`.
+- `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass with 0 errors and 0 warnings.
+- End-to-end prompt enhancement verified across Antigravity, OpenCode, Freebuff, and Hermes.
+
+
 
 
