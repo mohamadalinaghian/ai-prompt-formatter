@@ -76,3 +76,42 @@
 - Verified payload builder against 3 real repositories on this machine (`/Users/mohamad_mac/tools/ai-prompt-formatter` - 145 tokens, `/Users/mohamad_mac/tools/prompt-fmt` - 161 tokens, `/Users/mohamad_mac/chino_backend` - 122 tokens). All strictly within the 2500 token budget.
 - Redaction verified via unit test suite and end-to-end CLI check.
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass with 0 warnings.
+
+## Phase 3: LLM Layer (2026-10-11)
+
+### 1. Prompts
+- **Decision:** Versioned prompt templates created:
+  - `prompts/meta_prompt.v1.md`: Meta-prompt instructing LLM to rewrite developer prompts into strict JSON briefs according to `WriterOutput` schema. Emphasizes imperative task, verbatim identifiers/paths, minimal context, and treating user input as untrusted.
+  - `prompts/compactor.v1.md`: Session compactor prompt producing concise summaries (≤600 chars) focused on goals, decisions, constraints, and open issues.
+- **Loading:** `PromptLoader` in `pfmt-llm` embeds defaults at compile-time while allowing runtime file overrides.
+
+### 2. Groq Client and Model Fallback Chain
+- **Decision:** Implemented `GroqClient` with a multi-model fallback chain:
+  - Default chain: `openai/gpt-oss-120b` -> `qwen/qwen3.8-27b` -> `openai/gpt-oss-20b`.
+  - Structured output: Requests `response_format` type `json_schema` with the schemars schema; falls back to `json_object` with embedded schema if 400 is returned.
+  - Resiliency: Exponential backoff retries on HTTP 429 and 5xx errors.
+  - Validation: Parses raw JSON (stripping markdown fences if present) and runs strict schema and boundary validation via `pfmt_core::WriterOutput::validate()`.
+
+### 3. Decider Trait and Gate Implementations
+- **Decision:** Created `Decider` trait for typed probabilistic gating decisions:
+  - `needs_history`
+  - `already_structured`
+  - `injection_risk`
+  - `extra_rules_requested`
+  - `extra_report_requested`
+  - `filter_candidate_relevance(prompt, candidates)`
+- **Implementations:**
+  - `JevDecider`: Calls TypeSafe Jev API (`https://api.typesafe.ai/v1/systemone`) using `noul` decisions.
+  - `GroqJsonDecider`: Robust fallback implementation invoking fast Groq model with structured JSON decision schema.
+
+### 4. Output Verifier and Candidates Jailing
+- **Decision:** Implemented `OutputVerifier` ensuring the writer LLM adheres to contract:
+  - Dropping any paths in `relevant_files` that were not present in the filtered `<candidates>` list.
+  - Rejecting empty tasks or unparsable structures.
+
+### 5. Exit Check Results
+- All unit, stub mock, and live integration tests pass (33 tests across workspace).
+- `test_live_jev_smoke`: Live smoke test verified real TypeSafe Jev API connectivity and probability evaluation.
+- `test_live_groq_smoke`: Live smoke test verified Groq API key resolution from macOS Keychain (`pfmt-groq`) and successfully received structured JSON output from `openai/gpt-oss-120b`.
+- `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass cleanly.
+

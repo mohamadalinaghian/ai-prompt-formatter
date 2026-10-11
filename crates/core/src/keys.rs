@@ -21,8 +21,11 @@ pub fn resolve_api_key(source: &str, fallback_env_var: &str) -> Result<String, K
         let service_name = service.trim();
         // Attempt retrieving from macOS Keychain
         // Default username in macOS generic passwords for cli tools is typically the current user or "pfmt"
+        // Plan spec specifies account "default":
+        // e.g. Keychain service name: pfmt-groq (account: default).
         let username = whoami_username();
-        let entry = keyring::Entry::new(service_name, &username)
+        let entry = keyring::Entry::new(service_name, "default")
+            .or_else(|_| keyring::Entry::new(service_name, &username))
             .or_else(|_| keyring::Entry::new(service_name, "pfmt"));
 
         if let Ok(entry) = entry {
