@@ -225,4 +225,37 @@
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass with 0 warnings.
 - `pfmt doctor` reports all checks passing including agent store paths and endpoint reachability.
 
+## Phase 7: Karabiner and Shell Integration (2026-10-11)
+
+### 1. macOS Shell Runner (`scripts/ai_run.sh`)
+- **Decision:** Built single executable bash wrapper invoked by Karabiner-Elements shortcut.
+- **Lockfile & Concurrency:** Uses atomic directory locking (`/tmp/pfmt.lock`) with PID monitoring and 30-second stale lock expiration to prevent multiple overlapping executions.
+- **Modifier Clearance:** Inserts a 0.4s debounce sleep to let physical key modifiers release before keystroke synthesis.
+- **Frontmost App Detection:** Uses `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'` to dynamically supply the `--app` argument to `pfmt enhance`.
+- **Clipboard Preservation:** Backs up user clipboard before running; on abort or empty selection, original clipboard contents are safely restored.
+- **Degradation & Notification:**
+  - Exit 0 (Success): Pastes enhanced brief, sends macOS notification with sound `Glass`.
+  - Exit 10 (Degraded): Pastes degraded brief with banner, sends alert notification with sound `Basso`.
+  - Exit 1 (Abort): Does **not** paste; leaves original prompt untouched in agent text box and notifies user of failure reason.
+
+### 2. Karabiner Complex Modifications (`scripts/karabiner/pfmt.json`)
+- **Decision:** Configured standard manipulator binding `Control + Option + P` to trigger `scripts/ai_run.sh`.
+- **Validation:** JSON syntax validated against Karabiner-Elements schema.
+
+### 3. LaunchAgent Background Service (`scripts/launchd/pfmt-watch.plist`)
+- **Decision:** Created user LaunchAgent plist for `com.pfmt.watch`:
+  - `KeepAlive = true` to maintain watcher daemon execution.
+  - Redirects stdout/stderr to `~/.config/pfmt/watch.stdout.log` and `watch.stderr.log`.
+  - Validated via macOS `plutil -lint`.
+
+### 4. Installer (`scripts/install.sh`)
+- **Decision:** Automates building release binary (`cargo build --release`), copying to `~/.local/bin/pfmt` and `~/.local/bin/ai_run.sh`, installing Karabiner rules into `~/.config/karabiner/assets/complex_modifications`, registering LaunchAgent, and running `pfmt doctor`.
+
+### 5. Exit Check Results
+- Validated `scripts/karabiner/pfmt.json` and `scripts/launchd/pfmt-watch.plist` syntax.
+- Verified lockfile acquisition, stale lock recovery, and binary discovery via `tests/test_ai_run.sh`.
+- All workspace tests pass: **56 tests passed, 0 failed**.
+- `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass cleanly.
+
+
 
