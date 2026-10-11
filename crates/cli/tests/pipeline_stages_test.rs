@@ -363,3 +363,47 @@ async fn test_per_app_stage_override_abort() {
         .stderr_status
         .contains("ABORT: context collection failed"));
 }
+
+#[tokio::test]
+async fn test_stage_history_cached_summary_integration() {
+    let config = test_config();
+    let profile = test_profile();
+    let cwd = PathBuf::from("/Users/test/pipeline_history_test");
+
+    if let Ok(db) = pfmt_history::HistoryDb::open_default() {
+        let pk = db
+            .upsert_session(
+                "TestIntegrationApp",
+                "test-history-sess",
+                Some("TestIntegrationApp"),
+                Some("test-model"),
+                cwd.to_str(),
+                None,
+                None,
+            )
+            .expect("upsert failed");
+        db.update_summary(
+            pk,
+            "Prior task: created SQLite migrations.",
+            "test-model",
+            "v1",
+        )
+        .expect("update summary failed");
+    }
+
+    // Run pipeline with no_llm=true (forced no-llm) to verify it reads history and proceeds
+    let res = execute_enhance_pipeline(
+        "Build new endpoint",
+        "TestIntegrationApp",
+        true,
+        &cwd,
+        &config,
+        &profile,
+        None,
+    )
+    .await;
+
+    // Should succeed cleanly with exit code 0 and no history stage failures
+    assert_eq!(res.exit_code, ExitCode::Ok);
+    assert!(!res.failed_stages.iter().any(|s| s.starts_with("history")));
+}

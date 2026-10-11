@@ -1,0 +1,20 @@
+[package]
+name = "pfmt-history"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5.0"
+notify = "6.1"
+pfmt-core = { path = "../core" }
+pfmt-llm = { path = "../llm" }
+
+[dev-dependencies]
+tempfile = "3.10"

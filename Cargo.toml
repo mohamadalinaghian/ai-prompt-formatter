@@ -3,6 +3,7 @@ members = [
     "crates/core",
     "crates/context",
     "crates/llm",
+    "crates/history",
     "crates/cli",
 ]
 default-members = ["crates/cli"]

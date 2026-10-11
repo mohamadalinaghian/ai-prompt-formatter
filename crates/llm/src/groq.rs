@@ -98,6 +98,42 @@ impl GroqClient {
         Err(GroqChainError::AllModelsFailed(errors))
     }
 
+    /// Executes arbitrary JSON completion across the model chain.
+    /// Returns (raw_response_content, model_name_used).
+    pub async fn execute_json_completion(
+        &self,
+        system_prompt: &str,
+        user_payload: &str,
+    ) -> Result<(String, String), GroqChainError> {
+        if self.chain.is_empty() {
+            return Err(GroqChainError::EmptyChain);
+        }
+
+        let mut errors = Vec::new();
+
+        for model in &self.chain {
+            let body = json!({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_payload}
+                ],
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"}
+            });
+
+            match self.send_with_retry(&body).await {
+                Ok(content) => return Ok((content, model.clone())),
+                Err(err) => {
+                    tracing::warn!("Groq model {} failed for json completion: {}", model, err);
+                    errors.push((model.clone(), err));
+                }
+            }
+        }
+
+        Err(GroqChainError::AllModelsFailed(errors))
+    }
+
     async fn call_single_model(
         &self,
         model: &str,
@@ -211,8 +247,8 @@ impl GroqClient {
     }
 }
 
-/// Parse and validate raw LLM JSON response.
-pub fn parse_and_validate(raw: &str) -> Result<WriterOutput, String> {
+/// Strips markdown fences if present.
+pub fn clean_json_str(raw: &str) -> &str {
     let mut clean = raw.trim();
     if clean.starts_with("```json") {
         clean = clean.strip_prefix("```json").unwrap_or(clean).trim();
@@ -222,6 +258,12 @@ pub fn parse_and_validate(raw: &str) -> Result<WriterOutput, String> {
     if clean.ends_with("```") {
         clean = clean.strip_suffix("```").unwrap_or(clean).trim();
     }
+    clean
+}
+
+/// Parse and validate raw LLM JSON response.
+pub fn parse_and_validate(raw: &str) -> Result<WriterOutput, String> {
+    let clean = clean_json_str(raw);
 
     let output: WriterOutput = serde_json::from_str(clean)
         .map_err(|e| format!("JSON deserialization failed: {} on content: {}", e, clean))?;

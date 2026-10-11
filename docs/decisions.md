@@ -193,3 +193,36 @@
 - All workspace tests pass: **56 tests passed, 0 failed**.
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass cleanly with 0 warnings.
 
+## Phase 6: History and Watcher Daemon (2026-10-11)
+
+### 1. SQLite Database Architecture (`crates/history::db`)
+- **Decision:** Implemented `HistoryDb` with bundled SQLite in WAL mode (`journal_mode=WAL`, `synchronous=NORMAL`) at `~/.config/pfmt/history.db`.
+- **Schema:**
+  - `sessions`: `(id PK, agent, session_id, front_app, model, project_path, source_ref, source_cursor, summary, summary_model, summary_version, status, created_at, updated_at, summarized_at, UNIQUE(agent, session_id))`
+  - `jobs`: `(id PK, session_ref FK, kind, state, attempts, last_error, enqueued_at, started_at, finished_at)`
+- **Debounced Enqueueing:** `enqueue_compact_job` ensures at most 1 queued/running job exists per session, returning the existing job ID if already pending.
+
+### 2. Native Agent Adapters (`crates/history::adapters`)
+- **Decision:** Built pluggable adapters implementing `AgentAdapter`:
+  - `AntigravityAdapter`: Scans `~/.gemini/antigravity/brain/*/logs/transcript.jsonl`. Parses `USER_INPUT` (detecting session activation on 1st prompt) and `PLANNER_RESPONSE` (`status: DONE` signals assistant turn completion).
+  - `OpenCodeAdapter`: Detects SQLite stores in `~/Library/Application Support/ai.opencode.desktop`.
+  - `FreebuffAdapter`: Monitors application support path `~/Library/Application Support/freebuff`.
+  - `HermesAdapter`: Monitors `~/.hermes/` session databases.
+
+### 3. Compactor Worker (`crates/history::compactor`)
+- **Decision:** Configurable model (`[llm.compactor]`, default `qwen/qwen3.8-27b`).
+- **Prompt:** `prompts/compactor.v1.md` generates strict JSON: `{"summary": "string ≤600 chars"}`.
+- **Redaction & Jailing:** All conversation turns are redacted via `redact_secrets` before being sent to LLM.
+- **Summary Caching:** Compactor updates SQLite `sessions.summary`. `pfmt enhance` only *reads* the cached summary and never blocks on background compactor jobs.
+
+### 4. Watcher Daemon (`crates/history::watcher`)
+- **Decision:** `pfmt watch` runs `WatcherDaemon` in the background with graceful shutdown on `Ctrl+C`.
+- **Polling Loop:** Scans active agent directories every `watcher.poll_interval_ms` (default 3000ms), upserts active sessions to SQLite, and drains compactor job queue.
+
+### 5. Exit Check Results
+- Integrated history query into CLI pipeline: `pfmt enhance` reads latest cached summary for the current app and project path, seamlessly injecting `<history>` into the payload.
+- All workspace tests pass: **56 tests passed, 0 failed** across all crates (`pfmt-core`, `pfmt-context`, `pfmt-llm`, `pfmt-history`, `pfmt-cli`).
+- `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass with 0 warnings.
+- `pfmt doctor` reports all checks passing including agent store paths and endpoint reachability.
+
+

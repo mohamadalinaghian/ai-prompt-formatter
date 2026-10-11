@@ -216,41 +216,44 @@ pub async fn execute_enhance_pipeline(
     // Stage 5: History stage
     // ──────────────────────────────────────────
     let stage_start = Instant::now();
-    let cached_history: Option<String> = None;
-    if config.is_stage_enabled(app, "history") && hooks.fail_history {
-        let elapsed = stage_start.elapsed().as_millis() as u64;
-        if let Some(ref mut l) = logger {
-            l.record_stage(
-                StageLogRecord::new("history", StageStatus::Failed, elapsed)
-                    .with_error("injected failure"),
-            );
-        }
-
-        let on_fail = config.stage_on_fail(app, "history");
-        if on_fail == OnFail::Abort {
+    let mut cached_history: Option<String> = None;
+    if config.is_stage_enabled(app, "history") {
+        if hooks.fail_history {
+            let elapsed = stage_start.elapsed().as_millis() as u64;
             if let Some(ref mut l) = logger {
-                l.finalize("", None, false, ExitCode::Abort.as_i32());
+                l.record_stage(
+                    StageLogRecord::new("history", StageStatus::Failed, elapsed)
+                        .with_error("injected failure"),
+                );
             }
-            return PipelineResult {
-                exit_code: ExitCode::Abort,
-                stdout_content: String::new(),
-                stderr_status: "ABORT: history stage failed".to_string(),
-                failed_stages: vec!["history (injected failure)".to_string()],
-                log_path: logger.as_ref().map(|l| l.log_path().to_path_buf()),
-            };
-        }
-        failed_stages.push("history (adapter failed / db locked)".to_string());
-    } else if let Some(ref mut l) = logger {
-        let status = if config.is_stage_enabled(app, "history") {
-            StageStatus::Ok
+
+            let on_fail = config.stage_on_fail(app, "history");
+            if on_fail == OnFail::Abort {
+                if let Some(ref mut l) = logger {
+                    l.finalize("", None, false, ExitCode::Abort.as_i32());
+                }
+                return PipelineResult {
+                    exit_code: ExitCode::Abort,
+                    stdout_content: String::new(),
+                    stderr_status: "ABORT: history stage failed".to_string(),
+                    failed_stages: vec!["history (injected failure)".to_string()],
+                    log_path: logger.as_ref().map(|l| l.log_path().to_path_buf()),
+                };
+            }
+            failed_stages.push("history (adapter failed / db locked)".to_string());
         } else {
-            StageStatus::Disabled
-        };
-        l.record_stage(StageLogRecord::new(
-            "history",
-            status,
-            stage_start.elapsed().as_millis() as u64,
-        ));
+            // Read cached summary from history DB
+            if let Ok(db) = pfmt_history::HistoryDb::open_default() {
+                let cwd_str = cwd.to_str();
+                cached_history = db.get_latest_summary(app, cwd_str).ok().flatten();
+            }
+            let elapsed = stage_start.elapsed().as_millis() as u64;
+            if let Some(ref mut l) = logger {
+                l.record_stage(StageLogRecord::new("history", StageStatus::Ok, elapsed));
+            }
+        }
+    } else if let Some(ref mut l) = logger {
+        l.record_stage(StageLogRecord::new("history", StageStatus::Disabled, 0));
     }
 
     // ──────────────────────────────────────────

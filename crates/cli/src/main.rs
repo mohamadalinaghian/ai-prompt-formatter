@@ -54,7 +54,21 @@ async fn main() {
             handle_enhance(&app, no_llm).await;
         }
         Commands::Watch => {
-            eprintln!("pfmt watch: background session watcher (phase 6)");
+            let config = Config::load();
+            let db = match pfmt_history::HistoryDb::open_default() {
+                Ok(db) => db,
+                Err(e) => {
+                    eprintln!("Failed to open history database: {}", e);
+                    exit(ExitCode::Abort.as_i32());
+                }
+            };
+            let daemon = pfmt_history::WatcherDaemon::new(db, config);
+            let (tx, rx) = tokio::sync::watch::channel(false);
+            tokio::spawn(async move {
+                tokio::signal::ctrl_c().await.ok();
+                let _ = tx.send(true);
+            });
+            daemon.start(rx).await;
             exit(ExitCode::Ok.as_i32());
         }
         Commands::Review { from, to } => {
