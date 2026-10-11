@@ -37,10 +37,10 @@ impl Degradation {
 
         format!(
             "⚠️⚠️⚠️ PFMT DEGRADED OUTPUT: READ BEFORE SENDING ⚠️⚠️⚠️\n\
-            Failed stages: {}\n\
-            Result: {}\n\
-            Delete this banner before sending it to the agent.\n\
-            ⚠️⚠️⚠️ ─────────────────────────────────────────── ⚠️⚠️⚠️",
+Failed stages: {}\n\
+Result: {}\n\
+Delete this banner before sending it to the agent.\n\
+⚠️⚠️⚠️ ─────────────────────────────────────────── ⚠️⚠️⚠️",
             stages_str, self.result
         )
     }

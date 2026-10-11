@@ -115,3 +115,42 @@
 - `test_live_groq_smoke`: Live smoke test verified Groq API key resolution from macOS Keychain (`pfmt-groq`) and successfully received structured JSON output from `openai/gpt-oss-120b`.
 - `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass cleanly.
 
+## Phase 4: Orchestrator and Doctor (2026-10-11)
+
+### 1. Orchestrator Pipeline
+- **Decision:** Implemented `pipeline::execute_enhance_pipeline` in `crates/cli`:
+  - Enforces total time budget (`budget.total_ms`, default 9000ms); on timeout, automatically degrades to no-LLM output.
+  - Sequentially manages stages: `input` -> `idempotence` -> `redact` -> `context` -> `history` -> `gate` -> `writer` -> `verify` -> `render`.
+  - Implements the strict degradation ladder per Section 4.1:
+    - `input` failure: aborts with exit code 1, stderr status `empty input: nothing to do`.
+    - `idempotence`: exits code 0 with input verbatim and stderr status `unchanged`.
+    - `redact` failure: skips network stages and falls back to no-LLM skeleton with degradation banner.
+    - `context` failure: continues without `<repo>`, prepends degradation banner, exit code 10.
+    - `history` failure: continues without `<history>`, prepends degradation banner, exit code 10.
+    - `gate` failure: falls back to heuristics (candidates capped at 10, regex injection check), prepends degradation banner, exit code 10.
+    - `writer` failure: model fallback chain exhausted or timed out; degrades to raw prompt in default profile skeleton with fixed rules/report and degradation banner, exit code 10.
+    - `verify` failure: marks output "unverified" in banner, exit code 10.
+    - `render` failure: aborts with exit code 1.
+  - Stderr notification: emits one-line human-readable status for macOS notification (e.g. `OK (enhanced via openai/gpt-oss-120b, app=Antigravity)` or `DEGRADED: failed stages [...] (app=...)`).
+
+### 2. Diagnostics: `pfmt doctor`
+- **Decision:** Implemented `doctor::run_doctor`:
+  - **Configuration:** Verifies config file resolution (local `config.toml` -> `~/.config/pfmt/config.toml` -> embedded default) and default profile validity.
+  - **API Keys:** Audits Groq key (`keychain:pfmt-groq` or `GROQ_API_KEY`) and TypeSafe Jev key (`keychain:pfmt-jev` or `TYPESAFE_API_KEY`) with masked output.
+  - **macOS Integration:** Tests clipboard availability (`pbcopy`, `pbpaste`) and checks Accessibility / System Events permissions via `osascript` (detecting current front app).
+  - **Agent Stores:** Scans local filesystem for all 4 supported agent environments (`~/.gemini/antigravity`, `ai.opencode.desktop`, `freebuff`, `~/.hermes`).
+  - **Model Reachability:** Performs live ping checks against Groq (`https://api.groq.com/openai/v1/models`) and TypeSafe Jev (`https://api.typesafe.ai/v1/systemone`) measuring roundtrip latency.
+  - Emits recommendations for any warning or failure and exits 0 on system health or 1 on critical missing dependencies.
+
+### 3. Exit Check Results
+- Verified that **every stage can be forced to fail** and output is still valid XML with the correct degradation banner and exit code:
+  - Unit/integration test suite in `crates/cli/tests/pipeline_stages_test.rs` covers all 12 failure and override permutations.
+  - Full workspace test suite passes: **51 tests passed, 0 failed**.
+  - `pfmt doctor` runs cleanly and reports all systems operational (`[PASS]` across config, keys, permissions, stores, and model endpoints).
+  - Live CLI enhancement verified end-to-end:
+    - `echo "" | pfmt enhance --app Antigravity` -> exits code 1 (abort).
+    - `echo "<task>...</task><acceptance_criteria>...</acceptance_criteria>" | pfmt enhance --app Antigravity` -> exits code 0 (`unchanged`).
+    - `echo "..." | pfmt enhance --app Antigravity --no-llm` -> exits code 0 (`OK (enhanced via no-LLM)`).
+    - `echo "..." | pfmt enhance --app Antigravity` -> exits code 0, enhanced via `openai/gpt-oss-120b` with contextual `<task>`, `<context>`, `<acceptance_criteria>`, `<rules>`, and `<report>`.
+- `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass cleanly.
+

@@ -1448,11 +1448,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "dirs",
  "pfmt-context",
  "pfmt-core",
+ "pfmt-llm",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

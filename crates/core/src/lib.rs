@@ -22,8 +22,12 @@ pub fn is_idempotent(input: &str) -> bool {
 }
 
 /// Fallback no-LLM path: wraps the raw prompt into the minimal skeleton
-/// with fixed rules and report blocks from the profile.
-pub fn no_llm_wrap(raw: &str, profile: &Profile) -> String {
+/// with fixed rules and report blocks from the profile, optionally with a degradation banner.
+pub fn no_llm_wrap_with_degradation(
+    raw: &str,
+    profile: &Profile,
+    degradation: Option<&Degradation>,
+) -> String {
     let output = WriterOutput {
         task: raw.trim().to_string(),
         context: Vec::new(),
@@ -33,5 +37,11 @@ pub fn no_llm_wrap(raw: &str, profile: &Profile) -> String {
         extra_report: Vec::new(),
         assumptions: Vec::new(),
     };
-    render(&output, profile, None)
+    render(&output, profile, degradation)
+}
+
+/// Fallback no-LLM path: wraps the raw prompt into the minimal skeleton
+/// with fixed rules and report blocks from the profile without degradation banner.
+pub fn no_llm_wrap(raw: &str, profile: &Profile) -> String {
+    no_llm_wrap_with_degradation(raw, profile, None)
 }
