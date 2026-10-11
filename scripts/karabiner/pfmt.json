@@ -2,22 +2,25 @@
   "title": "pfmt Prompt Enhancer",
   "rules": [
     {
-      "description": "Enhance prompt in frontmost agent with pfmt (Ctrl + Option + P)",
+      "description": "Enhance prompt in frontmost agent with pfmt (Cmd + Shift + Space)",
       "manipulators": [
         {
           "type": "basic",
           "from": {
-            "key_code": "p",
+            "key_code": "spacebar",
             "modifiers": {
               "mandatory": [
-                "control",
-                "option"
+                "command",
+                "shift"
+              ],
+              "optional": [
+                "caps_lock"
               ]
             }
           },
           "to": [
             {
-              "shell_command": "/bin/bash ~/.local/bin/ai_run.sh"
+              "shell_command": "\"$HOME/.local/bin/ai_run.sh\""
             }
           ]
         }
