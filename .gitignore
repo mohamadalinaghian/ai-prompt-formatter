@@ -1,0 +1,5 @@
+/target
+/daily_logs
+**/*.rs.bk
+*.swp
+.DS_Store

@@ -1,0 +1,18 @@
+[package]
+name = "pfmt-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = "0.8"
+thiserror = "1.0"
+tracing = "0.1"
+toml = "0.8"
+dirs = "5"
+regex-lite = "0.1"
+keyring = { version = "4.2", features = ["apple-native-keyring-store"] }
+
+[dev-dependencies]
+serde_json = "1.0"

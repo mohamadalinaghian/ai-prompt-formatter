@@ -1,0 +1,29 @@
+[budget]
+total_ms = 9000
+payload_tokens_max = 2500
+
+[llm.writer]
+chain = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+api_key_source = "keychain:pfmt-groq"
+timeout_ms = 6000
+
+[llm.compactor]
+model = "groq-compactor-placeholder"
+
+[decider]
+provider = "jev"
+
+[stages.gate]
+enabled = true
+on_fail = "skip"
+
+[stages.verify]
+enabled = true
+on_fail = "skip"
+
+[stages.history]
+enabled = true
+on_fail = "skip"
+
+[logs]
+retention_days = 30

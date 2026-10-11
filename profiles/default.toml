@@ -1,0 +1,5 @@
+[rules]
+text = "- Be EXTREMELY concise. The user skims text. Do not explain how code works unless asked.\n- Follow existing patterns in the repo; check neighboring files first.\n- No mock data or swallowed errors; handle failures explicitly.\n- Ask before: destructive actions, schema or public API changes.\n- For other ambiguity, pick the most reasonable option and list it in the report."
+
+[report]
+text = "KEEP YOUR RESPONSE EXTREMELY SHORT.\n1. 🎯 **Key Changes**: (bullet points, max 1 line each)\n2. ⚠️ **Important / Blockers**: (assumptions, blockers, or critical decisions)\n3. 📋 **Remaining Tasks**: (what is left to do, actionable items)"
