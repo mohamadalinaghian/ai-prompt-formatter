@@ -57,13 +57,29 @@ async fn main() {
             eprintln!("pfmt watch: background session watcher (phase 6)");
             exit(ExitCode::Ok.as_i32());
         }
-        Commands::Review { .. } => {
-            eprintln!("pfmt review: log review tool (phase 5)");
-            exit(ExitCode::Ok.as_i32());
+        Commands::Review { from, to } => {
+            let log_dir = PathBuf::from("daily_logs");
+            match pfmt_cli::review::run_review(&log_dir, from.as_deref(), to.as_deref()) {
+                Ok(report) => {
+                    pfmt_cli::review::print_review_report(&report, from.as_deref(), to.as_deref());
+                    exit(ExitCode::Ok.as_i32());
+                }
+                Err(e) => {
+                    eprintln!("Error reading review logs: {}", e);
+                    exit(ExitCode::Abort.as_i32());
+                }
+            }
         }
-        Commands::Replay { .. } => {
-            eprintln!("pfmt replay: prompt replay tool (phase 5)");
-            exit(ExitCode::Ok.as_i32());
+        Commands::Replay { log_file } => {
+            let config = Config::load();
+            let profile = Profile::load_default();
+            match pfmt_cli::replay::run_replay(&log_file, &config, &profile).await {
+                Ok(()) => exit(ExitCode::Ok.as_i32()),
+                Err(e) => {
+                    eprintln!("Error replaying log: {}", e);
+                    exit(ExitCode::Abort.as_i32());
+                }
+            }
         }
         Commands::Doctor => {
             let config = Config::load();

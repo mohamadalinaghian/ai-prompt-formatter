@@ -1,6 +1,7 @@
 pub mod banner;
 pub mod config;
 pub mod keys;
+pub mod log;
 pub mod profile;
 pub mod redact;
 pub mod render;
@@ -9,6 +10,10 @@ pub mod types;
 pub use banner::{Degradation, ExitCode};
 pub use config::{AppConfig, BudgetConfig, Config, ConfigError, OnFail, StageConfig};
 pub use keys::{resolve_api_key, KeyError};
+pub use log::{
+    slugify_topic, ExecutionLog, GateLogRecord, StageLogRecord, StageStatus, VerifierLogRecord,
+    VersionLogRecord,
+};
 pub use profile::{Profile, ProfileError};
 pub use redact::redact_secrets;
 pub use render::{render, xml_escape};
