@@ -58,7 +58,7 @@ pub async fn execute_enhance_pipeline(
     // ──────────────────────────────────────────
     // Incremental Logger initialization (at start)
     // ──────────────────────────────────────────
-    let log_dir = PathBuf::from("daily_logs");
+    let log_dir = crate::logging::resolve_default_log_dir();
     let mut logger = if config.is_stage_enabled(app, "log") {
         IncrementalLogger::init(&log_dir, app, None, raw_input, config.logs.retention_days).ok()
     } else {

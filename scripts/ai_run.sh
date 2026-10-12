@@ -107,7 +107,7 @@ fi
 
 # 7. Execute pfmt enhancement pipeline
 STDERR_FILE=$(mktemp /tmp/pfmt_stderr.XXXXXX)
-ENHANCED_OUTPUT=$(printf "%s" "$COPIED" | "$PFMT_BIN" enhance --app "$FRONT_APP" 2> "$STDERR_FILE")
+ENHANCED_OUTPUT=$(printf "%s" "$COPIED" | pfmt-cli enhance --app "$FRONT_APP" --no-llm 2> "$STDERR_FILE")
 EXIT_CODE=$?
 STATUS_MSG=$(head -n 1 "$STDERR_FILE" | tr -d '\r' || echo "Completed")
 rm -f "$STDERR_FILE"

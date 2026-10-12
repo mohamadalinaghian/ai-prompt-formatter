@@ -9,7 +9,7 @@ total_ms = 9000
 payload_tokens_max = 2500
 
 [llm.writer]
-chain = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+chain = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b", "google/gemma-4-26b-a4b-it:free", "nvidia/nemotron-3.5-lightning:free", "google/gemma-4-31b-it:free"]
 api_key_source = "keychain:pfmt-groq"
 timeout_ms = 6000
 
@@ -128,6 +128,9 @@ fn default_writer_chain() -> Vec<String> {
         "openai/gpt-oss-120b".to_string(),
         "qwen/qwen3.8-27b".to_string(),
         "openai/gpt-oss-20b".to_string(),
+        "google/gemma-4-26b-a4b-it:free".to_string(),
+        "nvidia/nemotron-3.5-lightning:free".to_string(),
+        "google/gemma-4-31b-it:free".to_string(),
     ]
 }
 

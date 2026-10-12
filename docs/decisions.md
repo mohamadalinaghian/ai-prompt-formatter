@@ -59,7 +59,7 @@
 
 ### 2. Keychain and Environment Key Resolution
 - **Decision:** Integrated `keyring` (v4.2 with `apple-native-keyring-store` feature) in `pfmt-core::keys`.
-- **Resolution Strategy:** Supports `keychain:<service>` and `env:<VAR>`. If Keychain retrieval returns `NoEntry` or fails, transparently falls back to environment variable (`GROQ_API_KEY`, `TYPESAFE_API_KEY`). Failures are explicit (`KeyError`).
+- **Resolution Strategy:** Supports `keychain:<service>` and `env:<VAR>`. For `keychain:` sources the fallback env var is checked first (avoids a macOS Keychain auth prompt when env is already set), then Keychain accounts `["default", $USER, "pfmt"]` are each tried via `get_password` (note: `Entry::new` only builds a handle, so account fallback must happen at read time, not construction). Successful reads are cached per-process so one run hits the Keychain once per service instead of once per model/retry. Missing items yield `KeyError::NotFound`; non-`NoEntry` failures (prompt denied/cancelled, IO) yield `KeyError::AccessDenied`. Operational note: ad-hoc-signed binaries change hash on every build, so macOS cannot persist "Always Allow" across rebuilds — trust the installed `~/.local/bin/pfmt` explicitly (`-T`), use `rm` before `cp` on reinstall (stale signature cache SIGKILLs in-place overwrites), and prefer the installed binary over `target/debug` for daily use.
 
 ### 3. Context Collectors and Jailing
 - **Decision:** Created `pfmt-context` crate containing:

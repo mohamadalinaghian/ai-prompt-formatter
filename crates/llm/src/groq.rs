@@ -6,6 +6,11 @@ use std::time::Duration;
 use thiserror::Error;
 
 const DEFAULT_GROQ_ENDPOINT: &str = "https://api.groq.com/openai/v1/chat/completions";
+const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
+
+pub fn is_openrouter_model(model: &str) -> bool {
+    model.ends_with(":free") || model.starts_with("openrouter/") || model.contains(":free")
+}
 
 #[derive(Debug, Error)]
 pub enum GroqChainError {
@@ -65,6 +70,18 @@ impl GroqClient {
         }
     }
 
+    fn resolve_endpoint_and_key(&self, model: &str) -> (String, String) {
+        if self.endpoint != DEFAULT_GROQ_ENDPOINT {
+            (self.endpoint.clone(), self.api_key.clone())
+        } else if is_openrouter_model(model) {
+            let key = pfmt_core::resolve_api_key("keychain:pfmt-openrouter", "OPENROUTER_API_KEY")
+                .unwrap_or_else(|_| self.api_key.clone());
+            (OPENROUTER_ENDPOINT.to_string(), key)
+        } else {
+            (self.endpoint.clone(), self.api_key.clone())
+        }
+    }
+
     /// Executes the writer LLM call across the fallback model chain.
     /// Returns (WriterOutput, model_name_used).
     pub async fn execute_writer_chain(
@@ -79,17 +96,22 @@ impl GroqClient {
         let mut errors = Vec::new();
 
         for model in &self.chain {
-            tracing::info!("Attempting Groq writer model: {}", model);
+            let provider = if is_openrouter_model(model) {
+                "OpenRouter"
+            } else {
+                "Groq"
+            };
+            tracing::info!("Attempting {} writer model: {}", provider, model);
             match self
                 .call_single_model(model, system_prompt, user_payload)
                 .await
             {
                 Ok(output) => {
-                    tracing::info!("Groq writer succeeded with model: {}", model);
+                    tracing::info!("{} writer succeeded with model: {}", provider, model);
                     return Ok((output, model.clone()));
                 }
                 Err(err) => {
-                    tracing::warn!("Groq model {} failed: {}", model, err);
+                    tracing::warn!("{} model {} failed: {}", provider, model, err);
                     errors.push((model.clone(), err.to_string()));
                 }
             }
@@ -193,11 +215,14 @@ impl GroqClient {
         let max_retries = 2;
         let mut delay = Duration::from_millis(300);
 
+        let model = body.get("model").and_then(|m| m.as_str()).unwrap_or("");
+        let (endpoint, api_key) = self.resolve_endpoint_and_key(model);
+
         for attempt in 0..=max_retries {
             let req = self
                 .client
-                .post(&self.endpoint)
-                .header(AUTHORIZATION, format!("Bearer {}", self.api_key.trim()))
+                .post(&endpoint)
+                .header(AUTHORIZATION, format!("Bearer {}", api_key.trim()))
                 .timeout(self.timeout)
                 .json(body);
 
@@ -213,6 +238,12 @@ impl GroqClient {
                         let content = res_json
                             .pointer("/choices/0/message/content")
                             .and_then(|c| c.as_str())
+                            .filter(|c| !c.is_empty())
+                            .or_else(|| {
+                                res_json
+                                    .pointer("/choices/0/message/reasoning")
+                                    .and_then(|c| c.as_str())
+                            })
                             .ok_or_else(|| {
                                 "Missing /choices/0/message/content in response".to_string()
                             })?;

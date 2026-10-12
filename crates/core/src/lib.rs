@@ -9,7 +9,7 @@ pub mod types;
 
 pub use banner::{Degradation, ExitCode};
 pub use config::{AppConfig, BudgetConfig, Config, ConfigError, OnFail, StageConfig};
-pub use keys::{resolve_api_key, KeyError};
+pub use keys::{clear_key_cache, resolve_api_key, KeyError};
 pub use log::{
     slugify_topic, ExecutionLog, GateLogRecord, StageLogRecord, StageStatus, VerifierLogRecord,
     VersionLogRecord,

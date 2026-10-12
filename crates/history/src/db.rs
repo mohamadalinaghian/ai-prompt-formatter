@@ -193,7 +193,7 @@ impl HistoryDb {
         Ok(summary)
     }
 
-    /// Fetches the latest summary for an agent, optionally matching a specific project path.
+    /// Fetches the latest summary for an agent, strictly matching project_path if provided.
     pub fn get_latest_summary(
         &self,
         agent: &str,
@@ -211,9 +211,7 @@ impl HistoryDb {
             let summary: Option<String> = stmt
                 .query_row(params![agent, path], |row| row.get(0))
                 .optional()?;
-            if summary.is_some() {
-                return Ok(summary);
-            }
+            return Ok(summary);
         }
 
         let mut stmt = conn.prepare(

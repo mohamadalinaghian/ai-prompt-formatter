@@ -72,7 +72,7 @@ async fn main() {
             exit(ExitCode::Ok.as_i32());
         }
         Commands::Review { from, to } => {
-            let log_dir = PathBuf::from("daily_logs");
+            let log_dir = pfmt_cli::logging::resolve_default_log_dir();
             match pfmt_cli::review::run_review(&log_dir, from.as_deref(), to.as_deref()) {
                 Ok(report) => {
                     pfmt_cli::review::print_review_report(&report, from.as_deref(), to.as_deref());

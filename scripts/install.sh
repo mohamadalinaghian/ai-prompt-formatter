@@ -23,6 +23,10 @@ mkdir -p "$INSTALL_BIN_DIR"
 mkdir -p "$HOME/.config/pfmt"
 
 echo "📂 Installing executable to $INSTALL_BIN_DIR/pfmt..."
+# NOTE: remove before copy — overwriting an ad-hoc-signed binary in place
+# leaves macOS with a stale code-signature cache and the new binary gets
+# SIGKILLed ("Taskgated Invalid Signature"). A fresh inode avoids that.
+rm -f "$INSTALL_BIN_DIR/pfmt"
 cp "$REPO_DIR/target/release/pfmt" "$INSTALL_BIN_DIR/pfmt"
 chmod +x "$INSTALL_BIN_DIR/pfmt"
 

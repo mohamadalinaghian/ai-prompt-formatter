@@ -35,6 +35,7 @@ pub async fn run_doctor(config: &Config) -> bool {
         check_config(),
         check_profile(),
         check_groq_key(config),
+        check_openrouter_key(),
         check_jev_key(),
         check_clipboard(),
         check_macos_accessibility(),
@@ -158,7 +159,32 @@ fn check_groq_key(config: &Config) -> DoctorCheck {
             status: CheckStatus::Fail,
             details: format!("Not found: {}", e),
             remediation: Some(
-                "Store key in Keychain via `security add-generic-password -U -s pfmt-groq -a default -w <KEY>` or set GROQ_API_KEY environment variable"
+                "Store key via `security add-generic-password -U -s pfmt-groq -a default -w <KEY> -T ~/.local/bin/pfmt -T /usr/bin/security` then use the installed ~/.local/bin/pfmt (debug rebuilds change the ad-hoc signature and re-trigger the prompt). Or bypass Keychain entirely: set GROQ_API_KEY and use api_key_source = \"env:GROQ_API_KEY\""
+                    .to_string(),
+            ),
+        },
+    }
+}
+
+fn check_openrouter_key() -> DoctorCheck {
+    match resolve_api_key("keychain:pfmt-openrouter", "OPENROUTER_API_KEY") {
+        Ok(key) => {
+            let masked = mask_secret(&key);
+            DoctorCheck {
+                category: "API Keys",
+                name: "OpenRouter API Key".to_string(),
+                status: CheckStatus::Pass,
+                details: format!("Found ({})", masked),
+                remediation: None,
+            }
+        }
+        Err(_) => DoctorCheck {
+            category: "API Keys",
+            name: "OpenRouter API Key".to_string(),
+            status: CheckStatus::Warn,
+            details: "Not configured (fallback chain will skip OpenRouter models if key is missing)".to_string(),
+            remediation: Some(
+                "Optional: Store in Keychain via `security add-generic-password -U -s pfmt-openrouter -a default -w <KEY> -T ~/.local/bin/pfmt -T /usr/bin/security` or set OPENROUTER_API_KEY (env is checked first, no Keychain prompt)"
                     .to_string(),
             ),
         },
@@ -183,7 +209,7 @@ fn check_jev_key() -> DoctorCheck {
             status: CheckStatus::Warn,
             details: "Not configured (gate will use Groq fallback or heuristic bypass)".to_string(),
             remediation: Some(
-                "Optional: Store in Keychain via `security add-generic-password -U -s pfmt-jev -a default -w <KEY>` or set TYPESAFE_API_KEY"
+                "Optional: Store in Keychain via `security add-generic-password -U -s pfmt-jev -a default -w <KEY> -T ~/.local/bin/pfmt -T /usr/bin/security` or set TYPESAFE_API_KEY (env is checked first, no Keychain prompt)"
                     .to_string(),
             ),
         },

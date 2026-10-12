@@ -34,6 +34,8 @@ impl AntigravityAdapter {
         let mut assistant_message_finished = false;
         let mut line_count = 0;
 
+        let mut project_path: Option<String> = None;
+
         for line_res in reader.lines() {
             line_count += 1;
             let line = line_res.ok()?;
@@ -41,6 +43,44 @@ impl AntigravityAdapter {
                 let step_type = val["type"].as_str().unwrap_or("");
                 let status = val["status"].as_str().unwrap_or("");
                 let content = val["content"].as_str().unwrap_or("");
+
+                // Attempt to infer project_path from tool_calls if not yet found
+                if project_path.is_none() {
+                    if let Some(tool_calls) = val.get("tool_calls").and_then(|tc| tc.as_array()) {
+                        for tc in tool_calls {
+                            let args = &tc["args"];
+                            // args may be an object or a JSON-encoded string
+                            let parsed_args = if args.is_string() {
+                                args.as_str()
+                                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                            } else if args.is_object() {
+                                Some(args.clone())
+                            } else {
+                                None
+                            };
+
+                            if let Some(args_obj) = parsed_args {
+                                if let Some(cwd) = args_obj["Cwd"].as_str() {
+                                    let trimmed = cwd.trim().trim_matches('"');
+                                    if !trimmed.is_empty() {
+                                        project_path = Some(trimmed.to_string());
+                                        break;
+                                    }
+                                }
+                                if let Some(abs) = args_obj["AbsolutePath"].as_str() {
+                                    let trimmed = abs.trim().trim_matches('"');
+                                    if let Some(parent) = Path::new(trimmed).parent() {
+                                        let parent_str = parent.to_string_lossy();
+                                        if !parent_str.is_empty() {
+                                            project_path = Some(parent_str.to_string());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if step_type == "USER_INPUT" {
                     has_first_prompt = true;
@@ -73,7 +113,7 @@ impl AntigravityAdapter {
             session_id: conv_id.to_string(),
             front_app: "Antigravity".to_string(),
             model: Some("gemini".to_string()),
-            project_path: None,
+            project_path,
             source_ref: transcript_path.to_string_lossy().to_string(),
             source_cursor: line_count.to_string(),
             has_first_prompt,
@@ -164,6 +204,21 @@ mod tests {
         assert_eq!(
             s.turns[1].content,
             "Added LoginButton component in src/login.rs"
+        );
+        assert_eq!(s.project_path, None);
+
+        // 3. Line with tool_calls containing Cwd
+        writeln!(
+            file,
+            r#"{{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{{"name":"run_command","args":{{"CommandLine":"cargo check","Cwd":"/path/to/my_project"}}}}]}}"#
+        )
+        .unwrap();
+
+        let sessions2 = adapter.scan_sessions();
+        assert_eq!(sessions2.len(), 1);
+        assert_eq!(
+            sessions2[0].project_path.as_deref(),
+            Some("/path/to/my_project")
         );
     }
 }

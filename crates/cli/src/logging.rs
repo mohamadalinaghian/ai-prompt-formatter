@@ -12,9 +12,30 @@ pub struct IncrementalLogger {
     current_log: ExecutionLog,
 }
 
+/// Resolves the default log directory:
+/// If `./daily_logs` exists or current directory is a git repo/workspace, uses `./daily_logs`.
+/// Otherwise falls back to `~/.config/pfmt/daily_logs`.
+pub fn resolve_default_log_dir() -> PathBuf {
+    let local = PathBuf::from("daily_logs");
+    if local.exists() {
+        return local;
+    }
+    // Check if CWD has Cargo.toml, .git, or package.json
+    if Path::new(".git").exists()
+        || Path::new("Cargo.toml").exists()
+        || Path::new("package.json").exists()
+    {
+        return local;
+    }
+    // Global fallback
+    dirs::config_dir()
+        .map(|d| d.join("pfmt").join("daily_logs"))
+        .unwrap_or(local)
+}
+
 impl IncrementalLogger {
     /// Initializes an incremental log file at the start of a run.
-    /// File path: `./daily_logs/YYYY-MM-DD/<app>_<session>_<topic>_<HHMMSS>.json`
+    /// File path: `<base_dir>/YYYY-MM-DD/<app>_<session>_<topic>_<HHMMSS>.json`
     pub fn init(
         base_dir: &Path,
         app: &str,
