@@ -6,6 +6,7 @@ pub mod profile;
 pub mod redact;
 pub mod render;
 pub mod types;
+pub mod workflow;
 
 pub use banner::{Degradation, ExitCode};
 pub use config::{
@@ -20,6 +21,7 @@ pub use profile::{Profile, ProfileError};
 pub use redact::redact_secrets;
 pub use render::{render, render_with_template, xml_escape, ReportTemplate};
 pub use types::{ItemConfidence, ValidationError, WriterOutput};
+pub use workflow::validate_workflow;
 
 /// Context gathered from the frontmost app (probe stage).
 /// Every later stage uses whichever fields exist; missing fields are simply omitted.

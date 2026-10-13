@@ -13,4 +13,4 @@ pub use groq::{clean_json_str, parse_and_validate, GroqChainError, GroqClient};
 pub use prompts::PromptLoader;
 pub use verifier::{VerificationError, Verifier};
 
-pub use pfmt_core::ItemConfidence;
+pub use pfmt_core::{validate_workflow, ItemConfidence};

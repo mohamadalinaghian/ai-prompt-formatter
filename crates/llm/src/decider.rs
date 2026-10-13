@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
 
+pub use pfmt_core::validate_workflow;
+
 const DEFAULT_JEV_ENDPOINT: &str = "https://api.typesafe.ai/v1/systemone";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
