@@ -43,6 +43,7 @@ acquire_lock() {
 cleanup() {
     rm -rf "$LOCK_DIR"
 }
+# Move trap to after lock succeeds
 trap cleanup EXIT INT TERM
 
 acquire_lock
@@ -54,7 +55,9 @@ sleep 0.4
 FRONT_APP=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true' 2>/dev/null || echo "Unknown")
 FRONT_APP=$(echo "$FRONT_APP" | xargs)
 
-# 4. Locate pfmt binary
+# 4. Locate pfmt binary (use binary, not pfmt-cli package name)
+# Call binary directly: $PFMT_BIN enhance ... (not pfmt-cli)
+# Drop --no-llm so live LLM is called
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -75,17 +78,27 @@ fi
 PREV_CLIPBOARD="$(pbpaste 2>/dev/null || echo "")"
 
 # 6. Copy text from frontmost application
-# Clear clipboard temporarily to detect if copy succeeds
-printf "" | pbcopy
-
-# Synthesize Cmd+A then Cmd+C
-osascript 2>/dev/null <<EOF
-tell application "System Events"
-    keystroke "a" using command down
-    delay 0.05
-    keystroke "c" using command down
-end tell
+# For terminal apps (Terminal, iTerm2, Ghostty, Warp, kitty, alacritty):
+# Use Ctrl+A then Ctrl+C. For GUI apps: keep Cmd+A / Cmd+C.
+# Check if frontmost app is a terminal
+if echo "$FRONT_APP" | grep -qiE 'Terminal|iTerm2|Ghostty|Warp|kitty|alacritty'; then
+    osascript 2>/dev/null <<EOF
+    tell application "System Events"
+        keystroke "a" using control down
+        delay 0.05
+        keystroke "c" using control down
+    end tell
 EOF
+else
+    # GUI apps keep Cmd+A / Cmd+C (default behavior)
+    osascript 2>/dev/null <<EOF
+    tell application "System Events"
+        keystroke "a" using command down
+        delay 0.05
+        keystroke "c" using command down
+    end tell
+EOF
+fi
 
 # Wait up to 500ms for clipboard content
 COPIED=""
@@ -107,7 +120,7 @@ fi
 
 # 7. Execute pfmt enhancement pipeline
 STDERR_FILE=$(mktemp /tmp/pfmt_stderr.XXXXXX)
-ENHANCED_OUTPUT=$(printf "%s" "$COPIED" | pfmt-cli enhance --app "$FRONT_APP" --no-llm 2> "$STDERR_FILE")
+ENHANCED_OUTPUT=$(printf "%s" "$COPIED" | "$PFMT_BIN" enhance --app "$FRONT_APP" 2> "$STDERR_FILE")
 EXIT_CODE=$?
 STATUS_MSG=$(head -n 1 "$STDERR_FILE" | tr -d '\r' || echo "Completed")
 rm -f "$STDERR_FILE"

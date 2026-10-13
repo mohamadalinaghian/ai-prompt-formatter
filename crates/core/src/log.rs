@@ -92,6 +92,15 @@ pub struct ExecutionLog {
     pub agent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Probed project directory and how it was resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_dir: Option<String>,
+    /// Source references for the probed fields.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub probe_sources: Vec<String>,
+    /// Which context layers were actually used.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub context_layers: Vec<String>,
     pub topic: String,
     pub input: String,
     pub stages: Vec<StageLogRecord>,

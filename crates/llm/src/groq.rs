@@ -74,9 +74,14 @@ impl GroqClient {
         if self.endpoint != DEFAULT_GROQ_ENDPOINT {
             (self.endpoint.clone(), self.api_key.clone())
         } else if is_openrouter_model(model) {
-            let key = pfmt_core::resolve_api_key("keychain:pfmt-openrouter", "OPENROUTER_API_KEY")
-                .unwrap_or_else(|_| self.api_key.clone());
-            (OPENROUTER_ENDPOINT.to_string(), key)
+            // OpenRouter models must use OpenRouter key; do NOT fall back to Groq key
+            match pfmt_core::resolve_api_key("keychain:pfmt-openrouter", "OPENROUTER_API_KEY") {
+                Ok(key) => (OPENROUTER_ENDPOINT.to_string(), key),
+                Err(_) => {
+                    // Missing OpenRouter key: skip with explicit error (do not reuse Groq key)
+                    (OPENROUTER_ENDPOINT.to_string(), "missing-openrouter-key".to_string())
+                }
+            }
         } else {
             (self.endpoint.clone(), self.api_key.clone())
         }

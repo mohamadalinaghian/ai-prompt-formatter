@@ -3,11 +3,12 @@ use pfmt_context::{
     build_writer_payload, collect_repo_summary, extract_candidate_files, PayloadInput, SessionMode,
 };
 use pfmt_core::{
-    is_idempotent, no_llm_wrap_with_degradation, redact_secrets, render, resolve_api_key, Config,
+    AppContext, is_idempotent, no_llm_wrap_with_degradation, redact_secrets, render, resolve_api_key, Config,
     Degradation, ExitCode, GateLogRecord, OnFail, Profile, StageLogRecord, StageStatus,
     VerifierLogRecord, WriterOutput,
 };
 use pfmt_llm::{
+    ConfidenceChecker, ConfidenceItem, ItemConfidence, JevConfidence,
     Decider, GateDecisions, GroqClient, GroqJsonDecider, JevDecider, PromptLoader, Verifier,
 };
 use std::path::{Path, PathBuf};
@@ -31,6 +32,7 @@ pub struct StageFailureHook {
     pub fail_gate: bool,
     pub fail_writer: bool,
     pub fail_verify: bool,
+    pub fail_confidence: bool,
     pub fail_render: bool,
     pub force_timeout: bool,
 }
@@ -157,6 +159,40 @@ pub async fn execute_enhance_pipeline(
         }
     } else if let Some(ref mut l) = logger {
         l.record_stage(StageLogRecord::new("redact", StageStatus::Disabled, 0));
+    }
+
+    // ──────────────────────────────────────────
+    // Stage 4: Probe stage
+    // ──────────────────────────────────────────
+    let probe_start = Instant::now();
+    let app_context = AppContext {
+        app_name: app.to_string(),
+        project_dir: None,
+        session_id: None,
+        sources: Vec::new(),
+    };
+
+    let probe_enabled = config.is_stage_enabled(app, "probe");
+    if probe_enabled {
+        // Probe: resolve AppContext (app_name, project_dir, session_id).
+        // Missing fields degrade silently; downstream stages use whatever is available.
+        let elapsed = probe_start.elapsed().as_millis() as u64;
+        if let Some(ref mut l) = logger {
+            l.record_stage(StageLogRecord::new("probe", StageStatus::Ok, elapsed));
+        }
+    } else if let Some(ref mut l) = logger {
+        l.record_stage(StageLogRecord::new("probe", StageStatus::Disabled, 0));
+    }
+
+    // Log AppContext (probe result) and which context layers will be used
+    if let Some(ref mut l) = logger {
+        let layers_used: Vec<String> = vec!["context".to_string()];
+        l.set_app_context(
+            app_context.project_dir.as_ref().map(|p| p.to_string_lossy().to_string()).as_deref(),
+            app_context.session_id.as_deref(),
+            &app_context.sources,
+            &layers_used,
+        );
     }
 
     // ──────────────────────────────────────────
@@ -529,7 +565,107 @@ pub async fn execute_enhance_pipeline(
     }
 
     // ──────────────────────────────────────────
-    // Stage 8: Verify stage
+    // Stage 8b: Confidence stage (Jev scoring)
+    // ──────────────────────────────────────────
+    let mut confidence_report: Option<Vec<ItemConfidence>> = None;
+    let confidence_stage_start = Instant::now();
+    if !skip_network {
+        if let Some(ref mut out) = writer_output {
+            if config.is_stage_enabled(app, "confidence") {
+                if hooks.fail_confidence {
+                    let elapsed = confidence_stage_start.elapsed().as_millis() as u64;
+                    if let Some(ref mut l) = logger {
+                        l.record_stage(
+                            StageLogRecord::new("confidence", StageStatus::Failed, elapsed)
+                                .with_error("injected failure"),
+                        );
+                    }
+
+                    let on_fail = config.stage_on_fail(app, "confidence");
+                    if on_fail == OnFail::Abort {
+                        if let Some(ref mut l) = logger {
+                            l.finalize("", None, false, ExitCode::Abort.as_i32());
+                        }
+                        return PipelineResult {
+                            exit_code: ExitCode::Abort,
+                            stdout_content: String::new(),
+                            stderr_status: "ABORT: confidence stage failed".to_string(),
+                            failed_stages: vec!["confidence (injected failure)".to_string()],
+                            log_path: logger.as_ref().map(|l| l.log_path().to_path_buf()),
+                        };
+                    }
+                    failed_stages.push("confidence (Jev scoring failed)".to_string());
+                } else {
+                    let remaining_budget = total_budget.saturating_sub(start_time.elapsed());
+                    if remaining_budget.is_zero() {
+                        failed_stages.push("confidence (time budget exceeded)".to_string());
+                        if let Some(ref mut l) = logger {
+                            l.record_stage(
+                                StageLogRecord::new(
+                                    "confidence",
+                                    StageStatus::Failed,
+                                    confidence_stage_start.elapsed().as_millis() as u64,
+                                )
+                                .with_error("time budget exceeded"),
+                            );
+                        }
+                    } else {
+                        let confidence_timeout_ms = remaining_budget.as_millis().min(3000) as u64;
+                        match run_confidence_check(
+                            &processed_prompt,
+                            &app_context,
+                            &repo_summary,
+                            &cached_history,
+                            &filtered_candidates,
+                            out,
+                            config.confidence.threshold,
+                            confidence_timeout_ms,
+                        )
+                        .await
+                        {
+                            Ok(report) => {
+                                let elapsed = confidence_stage_start.elapsed().as_millis() as u64;
+                                confidence_report = Some(report);
+                                if let Some(ref mut l) = logger {
+                                    l.record_stage(StageLogRecord::new("confidence", StageStatus::Ok, elapsed));
+                                }
+                            }
+                            Err(e) => {
+                                let elapsed = confidence_stage_start.elapsed().as_millis() as u64;
+                                if let Some(ref mut l) = logger {
+                                    l.record_stage(
+                                        StageLogRecord::new("confidence", StageStatus::Failed, elapsed)
+                                            .with_error(&e),
+                                    );
+                                }
+                                let on_fail = config.stage_on_fail(app, "confidence");
+                                if on_fail == OnFail::Abort {
+                                    if let Some(ref mut l) = logger {
+                                        l.finalize("", None, false, ExitCode::Abort.as_i32());
+                                    }
+                                    return PipelineResult {
+                                        exit_code: ExitCode::Abort,
+                                        stdout_content: String::new(),
+                                        stderr_status: format!("ABORT: confidence failed: {}", e),
+                                        failed_stages: vec![format!("confidence ({})", e)],
+                                        log_path: logger.as_ref().map(|l| l.log_path().to_path_buf()),
+                                    };
+                                }
+                                failed_stages.push(format!("confidence ({})", e));
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let Some(ref mut l) = logger {
+            l.record_stage(StageLogRecord::new("confidence", StageStatus::Disabled, 0));
+        }
+    } else if let Some(ref mut l) = logger {
+        l.record_stage(StageLogRecord::new("confidence", StageStatus::Skipped, 0));
+    }
+
+    // ──────────────────────────────────────────
+    // Stage 9: Verify stage
     // ──────────────────────────────────────────
     let stage_start = Instant::now();
     if let Some(ref mut out) = writer_output {
@@ -648,7 +784,13 @@ pub async fn execute_enhance_pipeline(
     };
 
     let rendered_xml = match writer_output {
-        Some(ref out) => render(out, profile, degradation.as_ref()),
+        Some(ref out) => render(
+            out,
+            profile,
+            degradation.as_ref(),
+            confidence_report.as_ref().map(|v| v.as_slice()),
+            config.confidence.threshold,
+        ),
         None => no_llm_wrap_with_degradation(&processed_prompt, profile, degradation.as_ref()),
     };
 
@@ -732,4 +874,106 @@ async fn run_decider(
     }
 
     Err("no working decider API key available".to_string())
+}
+
+async fn run_confidence_check(
+    user_prompt: &str,
+    app_context: &AppContext,
+    repo_summary: &Option<String>,
+    cached_history: &Option<String>,
+    candidates: &[String],
+    writer_output: &WriterOutput,
+    threshold: f64,
+    timeout_ms: u64,
+) -> Result<Vec<ItemConfidence>, String> {
+    // Build the state (evidence) that the writer saw, redacted
+    let mut state_parts = Vec::new();
+    state_parts.push(format!("User prompt: {}", user_prompt));
+
+    if let Some(repo) = repo_summary {
+        state_parts.push(format!("Repo: {}", repo));
+    }
+    if let Some(history) = cached_history {
+        state_parts.push(format!("History: {}", history));
+    }
+    if !candidates.is_empty() {
+        state_parts.push(format!("Candidates: {}", candidates.join(", ")));
+    }
+    if let Some(project_dir) = &app_context.project_dir {
+        state_parts.push(format!("Project dir: {}", project_dir.display()));
+    }
+    if let Some(session_id) = &app_context.session_id {
+        state_parts.push(format!("Session: {}", session_id));
+    }
+
+    let state = state_parts.join("\n\n");
+
+    // Collect LLM-written items to check
+    let mut items = Vec::new();
+
+    // Task
+    items.push(ConfidenceItem {
+        id: "task".to_string(),
+        text: writer_output.task.clone(),
+        section: "task".to_string(),
+        index: 0,
+    });
+
+    // Acceptance criteria
+    for (i, ac) in writer_output.acceptance_criteria.iter().enumerate() {
+        items.push(ConfidenceItem {
+            id: format!("ac_{}", i),
+            text: ac.clone(),
+            section: "acceptance_criteria".to_string(),
+            index: i,
+        });
+    }
+
+    // Context
+    for (i, ctx) in writer_output.context.iter().enumerate() {
+        items.push(ConfidenceItem {
+            id: format!("ctx_{}", i),
+            text: ctx.clone(),
+            section: "context".to_string(),
+            index: i,
+        });
+    }
+
+    // Scope (relevant_files + out_of_scope)
+    for (i, rf) in writer_output.relevant_files.iter().enumerate() {
+        items.push(ConfidenceItem {
+            id: format!("scope_{}", i),
+            text: rf.clone(),
+            section: "scope".to_string(),
+            index: i,
+        });
+    }
+    for (i, oos) in writer_output.out_of_scope.iter().enumerate() {
+        items.push(ConfidenceItem {
+            id: format!("scope_{}", writer_output.relevant_files.len() + i),
+            text: oos.clone(),
+            section: "scope".to_string(),
+            index: i,
+        });
+    }
+
+    // Verify
+    for (i, ver) in writer_output.verify.iter().enumerate() {
+        items.push(ConfidenceItem {
+            id: format!("ver_{}", i),
+            text: ver.clone(),
+            section: "verify".to_string(),
+            index: i,
+        });
+    }
+
+    // Resolve Jev API key
+    let key = resolve_api_key("keychain:pfmt-jev", "TYPESAFE_API_KEY")
+        .map_err(|e| format!("Jev API key missing: {}", e))?;
+
+    let checker = JevConfidence::new(key, timeout_ms).with_threshold(threshold);
+    checker
+        .check_confidence(&state, &items)
+        .await
+        .map_err(|e| format!("confidence check: {}", e))
 }

@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// Writer output schema as defined in Section 4.3.
 /// Strict: deny_unknown_fields, all fields required in schema, arrays may be empty.
-#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WriterOutput {
     /// Imperative, specific task brief (≤ 1200 chars).
@@ -33,6 +33,29 @@ pub struct WriterOutput {
     /// Assumptions made for ambiguous requirements (≤ 4 items, each ≤ 200 chars).
     #[serde(default)]
     pub assumptions: Vec<String>,
+
+    /// Items known to be out of scope for this prompt (≤ 5 items, each ≤ 200 chars).
+    #[serde(default)]
+    pub out_of_scope: Vec<String>,
+
+    /// Verified commands and LLM verify items (≤ 5 items, each ≤ 200 chars).
+    #[serde(default)]
+    pub verify: Vec<String>,
+
+    /// Confidence report from Jev scoring of LLM-written items.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub confidence: Vec<ItemConfidence>,
+}
+
+/// Confidence score for a single item in a section.
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, PartialEq)]
+pub struct ItemConfidence {
+    /// Section name (e.g., "task", "ctx_1", "scope_1", "ver_1")
+    pub section: String,
+    /// Index of the item within its section
+    pub index: usize,
+    /// Confidence score (Some(f64) if scored, None if uncheckable)
+    pub score: Option<f64>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

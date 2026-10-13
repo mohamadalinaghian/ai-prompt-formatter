@@ -27,6 +27,9 @@ fn test_validation_success() {
         extra_rules: vec!["rule 1".to_string()],
         extra_report: vec!["report 1".to_string()],
         assumptions: vec!["assume X".to_string()],
+        out_of_scope: Vec::new(),
+        verify: Vec::new(),
+        confidence: Vec::new(),
     };
     assert!(out.validate().is_ok());
 }
@@ -42,6 +45,9 @@ fn test_validation_failure_task_too_long() {
         extra_rules: vec![],
         extra_report: vec![],
         assumptions: vec![],
+        out_of_scope: Vec::new(),
+        verify: Vec::new(),
+        confidence: Vec::new(),
     };
     let err = out.validate().unwrap_err();
     assert_eq!(err, ValidationError::TaskTooLong(1201));
@@ -57,9 +63,12 @@ fn test_render_and_xml_escaping() {
         extra_rules: vec!["Never use <any> type".to_string()],
         extra_report: vec!["Include metrics & timing".to_string()],
         assumptions: vec![],
+        out_of_scope: Vec::new(),
+        verify: Vec::new(),
+        confidence: Vec::new(),
     };
     let profile = sample_profile();
-    let xml = render(&out, &profile, None);
+    let xml = render(&out, &profile, None, None, 0.6);
 
     // Verify XML escaping
     assert!(xml.contains("Fix &lt;Button&gt; &amp; &lt;Modal&gt;"));
@@ -100,8 +109,11 @@ fn test_degradation_banner() {
         extra_rules: vec![],
         extra_report: vec![],
         assumptions: vec![],
+        out_of_scope: Vec::new(),
+        verify: Vec::new(),
+        confidence: Vec::new(),
     };
-    let xml = render(&out, &sample_profile(), Some(&deg));
+    let xml = render(&out, &sample_profile(), Some(&deg), None, 0.6);
     assert!(xml.starts_with(&banner));
 }
 

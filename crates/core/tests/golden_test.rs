@@ -31,25 +31,32 @@ fn test_golden_standard_output() {
         extra_rules: vec!["Add unit tests in auth_test.rs".to_string()],
         extra_report: vec!["4. 🔐 Security Impact: none".to_string()],
         assumptions: vec![],
+        out_of_scope: Vec::new(),
+        verify: Vec::new(),
+        confidence: Vec::new(),
     };
 
     let profile = sample_profile();
-    let rendered = render(&output, &profile, None);
+    let rendered = render(&output, &profile, None, None, 0.6);
 
     let expected = r#"<task>
 Refactor auth handler to use Bearer tokens
 </task>
-
-<context>
-- Repo uses axum 0.7
-- Tokens are validated via jwt crate
-</context>
 
 <acceptance_criteria>
 - Missing token returns 401 Unauthorized
 - Invalid token returns 401 Unauthorized
 - Valid token populates RequestContext
 </acceptance_criteria>
+
+<context>
+- Repo uses axum 0.7
+- Tokens are validated via jwt crate
+</context>
+
+<scope>
+<relevant_files>src/auth.rs, src/main.rs</relevant_files>
+</scope>
 
 <rules>
 - Be EXTREMELY concise. The user skims text. Do not explain how code works unless asked.
@@ -81,6 +88,9 @@ fn test_golden_degraded_output() {
         extra_rules: vec![],
         extra_report: vec![],
         assumptions: vec![],
+        out_of_scope: Vec::new(),
+        verify: Vec::new(),
+        confidence: Vec::new(),
     };
 
     let degradation = Degradation::new(
@@ -89,7 +99,7 @@ fn test_golden_degraded_output() {
     );
 
     let profile = sample_profile();
-    let rendered = render(&output, &profile, Some(&degradation));
+    let rendered = render(&output, &profile, Some(&degradation), None, 0.6);
 
     let expected = r#"⚠️⚠️⚠️ PFMT DEGRADED OUTPUT: READ BEFORE SENDING ⚠️⚠️⚠️
 Failed stages: writer (Groq timeout)

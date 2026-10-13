@@ -130,6 +130,34 @@ impl IncrementalLogger {
         let _ = self.flush();
     }
 
+    pub fn set_app_context(
+        &mut self,
+        project_dir: Option<&str>,
+        session_id: Option<&str>,
+        sources: &[String],
+        context_layers: &[String],
+    ) {
+        self.current_log.project_dir = project_dir.map(|s| s.to_string());
+        self.current_log.session_id = session_id.map(|s| s.to_string());
+        self.current_log.probe_sources = sources.to_vec();
+        self.current_log.context_layers = context_layers.to_vec();
+        let _ = self.flush();
+    }
+
+    pub fn set_app_context(
+        &mut self,
+        project_dir: Option<&str>,
+        session_id: Option<&str>,
+        sources: &[String],
+        context_layers: &[String],
+    ) {
+        self.current_log.project_dir = project_dir.map(|s| s.to_string());
+        self.current_log.session_id = session_id.map(|s| s.to_string());
+        self.current_log.probe_sources = sources.to_vec();
+        self.current_log.context_layers = context_layers.to_vec();
+        let _ = self.flush();
+    }
+
     pub fn finalize(
         &mut self,
         output_xml: &str,

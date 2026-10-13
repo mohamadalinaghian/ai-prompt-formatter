@@ -15,7 +15,7 @@ api_key_source = "keychain:pfmt-groq"
 timeout_ms = 6000
 
 [llm.compactor]
-model = "groq-compactor-placeholder"
+model = "qwen/qwen3.8-27b"
 
 [decider]
 provider = "jev"

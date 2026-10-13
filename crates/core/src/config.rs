@@ -55,6 +55,13 @@ on_fail = "abort"
 enabled = true
 on_fail = "continue"
 
+[confidence]
+threshold = 0.6
+
+[stages.confidence]
+enabled = true
+on_fail = "skip"
+
 [logs]
 retention_days = 30
 "#;
@@ -197,6 +204,24 @@ impl Default for DeciderConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ConfidenceConfig {
+    #[serde(default = "default_confidence_threshold")]
+    pub threshold: f64,
+}
+
+fn default_confidence_threshold() -> f64 {
+    0.6
+}
+
+impl Default for ConfidenceConfig {
+    fn default() -> Self {
+        Self {
+            threshold: default_confidence_threshold(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LogConfig {
     #[serde(default = "default_retention_days")]
     pub retention_days: u64,
@@ -226,6 +251,8 @@ pub struct Config {
     pub budget: BudgetConfig,
     #[serde(default)]
     pub llm: LlmConfig,
+    #[serde(default)]
+    pub confidence: ConfidenceConfig,
     #[serde(default)]
     pub decider: DeciderConfig,
     #[serde(default)]

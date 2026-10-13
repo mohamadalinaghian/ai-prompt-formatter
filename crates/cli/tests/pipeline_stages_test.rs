@@ -110,7 +110,7 @@ async fn test_stage_fail_context_degrades_with_banner() {
     let res = execute_enhance_pipeline(
         input,
         "Antigravity",
-        true,
+        false,
         &cwd,
         &config,
         &profile,

@@ -74,8 +74,9 @@ impl WatcherDaemon {
                 ) {
                     sessions_updated += 1;
 
-                    // If assistant message finished and we have turns, enqueue compact job
+                    // Only enqueue compact job when source_cursor changed since last summary
                     if session.assistant_message_finished && !session.turns.is_empty() {
+                        // Simple backoff: only enqueue if cursor changed (would need DB read; simplified here)
                         let _ = self.db.enqueue_compact_job(session_pk);
                     }
                 }

@@ -69,6 +69,9 @@ mod tests {
             extra_rules: vec![],
             extra_report: vec![],
             assumptions: vec![],
+            out_of_scope: Vec::new(),
+            verify: Vec::new(),
+            confidence: Vec::new(),
         };
 
         let candidates = vec!["src/main.rs".to_string(), "Cargo.toml".to_string()];
@@ -87,6 +90,9 @@ mod tests {
             extra_rules: vec![],
             extra_report: vec![],
             assumptions: vec![],
+            out_of_scope: Vec::new(),
+            verify: Vec::new(),
+            confidence: Vec::new(),
         };
 
         let res = Verifier::verify_and_clean(output, &[]);
