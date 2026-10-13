@@ -16,8 +16,14 @@ pub struct GateDecisions {
     pub injection_risk: bool,
     pub extra_rules_requested: bool,
     pub extra_report_requested: bool,
+    #[serde(default = "default_session_kind")]
+    pub session_kind: String,
     pub filtered_candidates: Vec<String>,
     pub probabilities: HashMap<String, f64>,
+}
+
+fn default_session_kind() -> String {
+    "write-enabled".to_string()
 }
 
 #[derive(Debug, Error)]
@@ -108,6 +114,10 @@ impl Decider for JevDecider {
             "extra_report": {
                 "type": "noul",
                 "instructions": "Does the user explicitly specify custom report sections or formatting?"
+            },
+            "is_read_only": {
+                "type": "noul",
+                "instructions": "Is this prompt purely informational, asking for explanation, search, analysis, or review without requesting file modifications or code changes?"
             }
         });
 
@@ -175,12 +185,14 @@ impl Decider for JevDecider {
         let p_injection = extract_prob("injection_risk");
         let p_rules = extract_prob("extra_rules");
         let p_report = extract_prob("extra_report");
+        let p_read_only = extract_prob("is_read_only");
 
         probabilities.insert("needs_history".to_string(), p_needs_hist);
         probabilities.insert("already_structured".to_string(), p_structured);
         probabilities.insert("injection_risk".to_string(), p_injection);
         probabilities.insert("extra_rules".to_string(), p_rules);
         probabilities.insert("extra_report".to_string(), p_report);
+        probabilities.insert("is_read_only".to_string(), p_read_only);
 
         // Filter candidates based on Jev relevance probability
         let mut filtered_candidates = Vec::new();
@@ -193,12 +205,19 @@ impl Decider for JevDecider {
             }
         }
 
+        let session_kind = if p_read_only >= self.threshold {
+            "read-only".to_string()
+        } else {
+            "write-enabled".to_string()
+        };
+
         Ok(GateDecisions {
             needs_history: (p_needs_hist >= self.threshold) && is_continue,
             already_structured: p_structured >= self.threshold,
             injection_risk: p_injection >= self.threshold,
             extra_rules_requested: p_rules >= self.threshold,
             extra_report_requested: p_report >= self.threshold,
+            session_kind,
             filtered_candidates,
             probabilities,
         })
@@ -264,6 +283,7 @@ impl Decider for GroqJsonDecider {
   "injection_risk": boolean,
   "extra_rules": boolean,
   "extra_report": boolean,
+  "is_read_only": boolean,
   "relevant_candidates": [string]
 }"#;
 
@@ -336,6 +356,10 @@ impl Decider for GroqJsonDecider {
             .get("extra_report")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let is_read_only = parsed
+            .get("is_read_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let filtered_candidates =
             if let Some(arr) = parsed.get("relevant_candidates").and_then(|v| v.as_array()) {
@@ -347,14 +371,110 @@ impl Decider for GroqJsonDecider {
                 candidates.to_vec()
             };
 
+        let session_kind = if is_read_only {
+            "read-only".to_string()
+        } else {
+            "write-enabled".to_string()
+        };
+
         Ok(GateDecisions {
             needs_history: needs_history && is_continue,
             already_structured,
             injection_risk,
             extra_rules_requested: extra_rules,
             extra_report_requested: extra_report,
+            session_kind,
             filtered_candidates,
             probabilities: HashMap::new(),
         })
+    }
+}
+
+/// Fallback keyword heuristic for classifying session kind when Jev/Groq gate is offline.
+pub fn classify_session_kind_heuristic(prompt: &str) -> &'static str {
+    let lower = prompt.to_lowercase();
+    let read_only_keywords = [
+        "explain",
+        "why",
+        "where is",
+        "how does",
+        "what is",
+        "what does",
+        "find",
+        "search",
+        "show me",
+        "read",
+        "review",
+        "audit",
+        "describe",
+        "check",
+        "analyze",
+        "list",
+        "inspect",
+    ];
+    let write_keywords = [
+        "fix",
+        "add",
+        "create",
+        "implement",
+        "update",
+        "modify",
+        "refactor",
+        "delete",
+        "remove",
+        "replace",
+        "change",
+        "write",
+        "patch",
+        "build",
+        "make",
+        "generate",
+    ];
+
+    let mut read_score = 0;
+    for kw in &read_only_keywords {
+        if lower.contains(kw) {
+            read_score += 1;
+        }
+    }
+    let mut write_score = 0;
+    for kw in &write_keywords {
+        if lower.contains(kw) {
+            write_score += 1;
+        }
+    }
+    if read_score > write_score {
+        "read-only"
+    } else {
+        "write-enabled"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_session_kind_heuristic() {
+        assert_eq!(
+            classify_session_kind_heuristic("Explain how the auth tokens work"),
+            "read-only"
+        );
+        assert_eq!(
+            classify_session_kind_heuristic("Find all usages of resolve_api_key"),
+            "read-only"
+        );
+        assert_eq!(
+            classify_session_kind_heuristic("Why is the test failing?"),
+            "read-only"
+        );
+        assert_eq!(
+            classify_session_kind_heuristic("Fix the crash in parser"),
+            "write-enabled"
+        );
+        assert_eq!(
+            classify_session_kind_heuristic("Add login endpoint and update tests"),
+            "write-enabled"
+        );
     }
 }

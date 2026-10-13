@@ -64,6 +64,28 @@ on_fail = "skip"
 
 [logs]
 retention_days = 30
+
+[templates.default]
+rules = """- Be EXTREMELY concise. The user skims text. Do not explain how code works unless asked.
+- Follow existing patterns in the repo; check neighboring files first.
+- No mock data or swallowed errors; handle failures explicitly.
+- Ask before: destructive actions, schema or public API changes.
+- For other ambiguity, pick the most reasonable option and list it in the report."""
+report = """KEEP YOUR RESPONSE EXTREMELY SHORT.
+1. 🎯 **Key Changes**: (bullet points, max 1 line each)
+2. ⚠️ **Important / Blockers**: (assumptions, blockers, or critical decisions)
+3. 📋 **Remaining Tasks**: (what is left to do, actionable items)"""
+skip_file_change_report = false
+
+[templates.read_only]
+rules = """- Be EXTREMELY concise. The user skims text. Do not explain how code works unless asked.
+- Read-only analysis: do NOT make code edits or file modifications.
+- Ground all explanations in the codebase."""
+report = """KEEP YOUR RESPONSE EXTREMELY SHORT.
+1. 🔍 **Key Findings / Answers**: (bullet points, max 1 line each)
+2. ⚠️ **Important / Blockers**: (assumptions, blockers, or critical decisions)
+3. 📋 **Remaining Tasks / Next Steps**: (actionable items)"""
+skip_file_change_report = true
 "#;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
@@ -245,6 +267,16 @@ pub struct AppConfig {
     pub stages: HashMap<String, StageConfig>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct TemplateConfig {
+    #[serde(default)]
+    pub rules: String,
+    #[serde(default)]
+    pub report: String,
+    #[serde(default)]
+    pub skip_file_change_report: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     #[serde(default)]
@@ -261,6 +293,8 @@ pub struct Config {
     pub apps: HashMap<String, AppConfig>,
     #[serde(default)]
     pub logs: LogConfig,
+    #[serde(default)]
+    pub templates: HashMap<String, TemplateConfig>,
 }
 
 #[derive(Debug, Error)]

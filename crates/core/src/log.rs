@@ -64,6 +64,8 @@ pub struct GateLogRecord {
     pub injection_risk: bool,
     pub extra_rules_requested: bool,
     pub extra_report_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_kind: Option<String>,
     pub allowed_candidates: Vec<String>,
     pub probabilities: HashMap<String, f64>,
 }

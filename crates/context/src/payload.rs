@@ -25,6 +25,7 @@ pub struct WriterPayload {
 pub struct PayloadInput<'a> {
     pub agent: &'a str,
     pub mode: SessionMode,
+    pub session_id: Option<&'a str>,
     pub repo_summary: Option<&'a str>,
     pub candidates: &'a [String],
     pub history_summary: Option<&'a str>,
@@ -99,7 +100,13 @@ pub fn build_writer_payload(input: &PayloadInput) -> WriterPayload {
         }
 
         if !parts.is_empty() {
-            history_str = format!("<history>\n{}\n</history>", parts.join("\n"));
+            let tag_header = match input.session_id {
+                Some(sid) if !sid.trim().is_empty() => {
+                    format!("<history src=\"{}\">", redact_secrets(sid.trim()))
+                }
+                _ => "<history>".to_string(),
+            };
+            history_str = format!("{}\n{}\n</history>", tag_header, parts.join("\n"));
         }
     }
 
@@ -125,8 +132,15 @@ pub fn build_writer_payload(input: &PayloadInput) -> WriterPayload {
     // Budget enforcement: if over budget, trim history turns first, then repo
     if tokens > input.max_tokens && input.mode == SessionMode::Continue {
         if let Some(summary) = input.history_summary {
+            let tag_header = match input.session_id {
+                Some(sid) if !sid.trim().is_empty() => {
+                    format!("<history src=\"{}\">", redact_secrets(sid.trim()))
+                }
+                _ => "<history>".to_string(),
+            };
             let trimmed_hist = format!(
-                "<history>\nSummary: {}\n</history>",
+                "{}\nSummary: {}\n</history>",
+                tag_header,
                 redact_secrets(summary.trim())
             );
             sections[3] = trimmed_hist;
@@ -169,6 +183,7 @@ mod tests {
         let input = PayloadInput {
             agent: "antigravity",
             mode: SessionMode::Fresh,
+            session_id: None,
             repo_summary: Some("stack: Rust; test: cargo test"),
             candidates: &["src/main.rs".to_string()],
             history_summary: None,
@@ -199,6 +214,7 @@ mod tests {
         let input = PayloadInput {
             agent: "opencode",
             mode: SessionMode::Continue,
+            session_id: None,
             repo_summary: Some("stack: TypeScript"),
             candidates: &[],
             history_summary: Some("User worked on authentication flow"),
@@ -224,6 +240,29 @@ mod tests {
     }
 
     #[test]
+    fn test_payload_builder_continue_mode_with_session_id_src() {
+        let input = PayloadInput {
+            agent: "antigravity",
+            mode: SessionMode::Continue,
+            session_id: Some("session-abc-123"),
+            repo_summary: None,
+            candidates: &[],
+            history_summary: Some("User designed the schema"),
+            history_turns: &[],
+            user_prompt: "Now write the models",
+            max_tokens: 2500,
+        };
+        let payload = build_writer_payload(&input);
+
+        assert!(payload
+            .formatted
+            .contains("<history src=\"session-abc-123\">"));
+        assert!(payload
+            .formatted
+            .contains("Summary: User designed the schema"));
+    }
+
+    #[test]
     fn test_payload_builder_redacts_secrets() {
         // Assembled at runtime so no real-key-shaped literal lives in the source tree
         // (GitHub push protection blocks `gsk_<32+ alnum>` even in test fixtures).
@@ -231,6 +270,7 @@ mod tests {
         let input = PayloadInput {
             agent: "antigravity",
             mode: SessionMode::Fresh,
+            session_id: None,
             repo_summary: None,
             candidates: &[],
             history_summary: None,

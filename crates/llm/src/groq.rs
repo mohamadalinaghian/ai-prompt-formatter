@@ -79,7 +79,10 @@ impl GroqClient {
                 Ok(key) => (OPENROUTER_ENDPOINT.to_string(), key),
                 Err(_) => {
                     // Missing OpenRouter key: skip with explicit error (do not reuse Groq key)
-                    (OPENROUTER_ENDPOINT.to_string(), "missing-openrouter-key".to_string())
+                    (
+                        OPENROUTER_ENDPOINT.to_string(),
+                        "missing-openrouter-key".to_string(),
+                    )
                 }
             }
         } else {

@@ -57,6 +57,7 @@ fn test_payload_under_budget_on_three_real_repos() {
         let payload_input = pfmt_context::PayloadInput {
             agent,
             mode: SessionMode::Continue,
+            session_id: None,
             repo_summary: Some(&repo_summary),
             candidates: &candidates,
             history_summary: Some(history_summary),

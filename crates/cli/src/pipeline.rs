@@ -3,13 +3,13 @@ use pfmt_context::{
     build_writer_payload, collect_repo_summary, extract_candidate_files, PayloadInput, SessionMode,
 };
 use pfmt_core::{
-    AppContext, is_idempotent, no_llm_wrap_with_degradation, redact_secrets, render, resolve_api_key, Config,
-    Degradation, ExitCode, GateLogRecord, OnFail, Profile, StageLogRecord, StageStatus,
-    VerifierLogRecord, WriterOutput,
+    is_idempotent, redact_secrets, render_with_template, resolve_api_key, AppContext, Config,
+    Degradation, ExitCode, GateLogRecord, OnFail, Profile, ReportTemplate, StageLogRecord,
+    StageStatus, VerifierLogRecord, WriterOutput,
 };
 use pfmt_llm::{
-    ConfidenceChecker, ConfidenceItem, ItemConfidence, JevConfidence,
-    Decider, GateDecisions, GroqClient, GroqJsonDecider, JevDecider, PromptLoader, Verifier,
+    ConfidenceChecker, ConfidenceItem, Decider, GateDecisions, GroqClient, GroqJsonDecider,
+    ItemConfidence, JevConfidence, JevDecider, PromptLoader, Verifier,
 };
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -79,7 +79,7 @@ pub async fn execute_enhance_pipeline(
                 StageLogRecord::new("input", StageStatus::Failed, elapsed)
                     .with_error("empty input"),
             );
-            l.finalize("", None, false, ExitCode::Abort.as_i32());
+            l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
         }
 
         let on_fail = config.stage_on_fail(app, "input");
@@ -107,7 +107,8 @@ pub async fn execute_enhance_pipeline(
     // ──────────────────────────────────────────
     if is_idempotent(trimmed_input) {
         if let Some(ref mut l) = logger {
-            l.finalize(raw_input, None, false, ExitCode::Ok.as_i32());
+            l.finalize(raw_input, None, false, ExitCode::Ok.as_i32())
+                .await;
         }
         return PipelineResult {
             exit_code: ExitCode::Ok,
@@ -138,7 +139,7 @@ pub async fn execute_enhance_pipeline(
             let on_fail = config.stage_on_fail(app, "redact");
             if on_fail == OnFail::Abort {
                 if let Some(ref mut l) = logger {
-                    l.finalize("", None, false, ExitCode::Abort.as_i32());
+                    l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                 }
                 return PipelineResult {
                     exit_code: ExitCode::Abort,
@@ -165,30 +166,41 @@ pub async fn execute_enhance_pipeline(
     // Stage 4: Probe stage
     // ──────────────────────────────────────────
     let probe_start = Instant::now();
-    let app_context = AppContext {
-        app_name: app.to_string(),
-        project_dir: None,
-        session_id: None,
-        sources: Vec::new(),
-    };
-
     let probe_enabled = config.is_stage_enabled(app, "probe");
-    if probe_enabled {
-        // Probe: resolve AppContext (app_name, project_dir, session_id).
-        // Missing fields degrade silently; downstream stages use whatever is available.
+    let app_context = if probe_enabled {
+        let ctx = crate::probe::resolve_probe(app, cwd);
         let elapsed = probe_start.elapsed().as_millis() as u64;
         if let Some(ref mut l) = logger {
             l.record_stage(StageLogRecord::new("probe", StageStatus::Ok, elapsed));
         }
-    } else if let Some(ref mut l) = logger {
-        l.record_stage(StageLogRecord::new("probe", StageStatus::Disabled, 0));
-    }
+        ctx
+    } else {
+        if let Some(ref mut l) = logger {
+            l.record_stage(StageLogRecord::new("probe", StageStatus::Disabled, 0));
+        }
+        AppContext {
+            app_name: app.to_string(),
+            project_dir: None,
+            session_id: None,
+            sources: Vec::new(),
+        }
+    };
 
     // Log AppContext (probe result) and which context layers will be used
     if let Some(ref mut l) = logger {
-        let layers_used: Vec<String> = vec!["context".to_string()];
+        let mut layers_used: Vec<String> = Vec::new();
+        if config.is_stage_enabled(app, "context") {
+            layers_used.push("context".to_string());
+        }
+        if config.is_stage_enabled(app, "history") {
+            layers_used.push("history".to_string());
+        }
         l.set_app_context(
-            app_context.project_dir.as_ref().map(|p| p.to_string_lossy().to_string()).as_deref(),
+            app_context
+                .project_dir
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .as_deref(),
             app_context.session_id.as_deref(),
             &app_context.sources,
             &layers_used,
@@ -204,18 +216,92 @@ pub async fn execute_enhance_pipeline(
     }
 
     // ──────────────────────────────────────────
-    // Stage 4: Context stage
+    // Stage 4 & 5 & Template: Concurrent Context, History (Analyzer cache), and Template Selection
     // ──────────────────────────────────────────
-    let stage_start = Instant::now();
-    let mut repo_summary = None;
-    let mut candidate_files = Vec::new();
+    let is_context_enabled = config.is_stage_enabled(app, "context");
+    let is_history_enabled = config.is_stage_enabled(app, "history");
+    let fail_context = hooks.fail_context;
+    let fail_history = hooks.fail_history;
+    let target_repo = app_context.project_dir.as_deref().unwrap_or(cwd);
+    let target_repo_buf = target_repo.to_path_buf();
+    let target_repo_for_context = target_repo_buf.clone();
+    let target_repo_for_history = target_repo_buf;
+    let prompt_for_context = processed_prompt.clone();
+    let app_for_history = app.to_string();
+    let session_id_opt = app_context.session_id.clone();
 
-    if config.is_stage_enabled(app, "context") {
-        if hooks.fail_context {
-            let elapsed = stage_start.elapsed().as_millis() as u64;
+    let context_fut = async move {
+        if !is_context_enabled {
+            return (StageStatus::Disabled, None, Vec::new(), 0u64, None);
+        }
+        if fail_context {
+            return (
+                StageStatus::Failed,
+                None,
+                Vec::new(),
+                0u64,
+                Some("injected failure".to_string()),
+            );
+        }
+        let start = Instant::now();
+        let summary = collect_repo_summary(&target_repo_for_context);
+        let candidates = extract_candidate_files(&prompt_for_context, &target_repo_for_context);
+        let elapsed = start.elapsed().as_millis() as u64;
+        (StageStatus::Ok, Some(summary), candidates, elapsed, None)
+    };
+
+    let history_fut = async move {
+        if !is_history_enabled {
+            return (StageStatus::Disabled, None, None, 0u64, None);
+        }
+        if fail_history {
+            return (
+                StageStatus::Failed,
+                None,
+                None,
+                0u64,
+                Some("injected failure".to_string()),
+            );
+        }
+        let start = Instant::now();
+        let mut cached_history = None;
+        let mut history_src = None;
+        if let Ok(db) = pfmt_history::HistoryDb::open_default() {
+            let path_str = target_repo_for_history.to_str();
+            if let Some(ref sid) = session_id_opt {
+                cached_history = db.get_session_summary(&app_for_history, sid).ok().flatten();
+                if cached_history.is_some() {
+                    history_src = Some(sid.clone());
+                }
+            }
+            if cached_history.is_none() {
+                cached_history = db
+                    .get_latest_summary(&app_for_history, path_str)
+                    .ok()
+                    .flatten();
+                if cached_history.is_some() {
+                    history_src = Some("project-fallback".to_string());
+                }
+            }
+        }
+        let elapsed = start.elapsed().as_millis() as u64;
+        (StageStatus::Ok, cached_history, history_src, elapsed, None)
+    };
+
+    let template_fut = async { ReportTemplate::resolve(config, profile, profile.kind.as_deref()) };
+
+    let (
+        (context_status, repo_summary, candidate_files, context_elapsed, _context_err),
+        (history_status, cached_history, history_src, history_elapsed, _history_err),
+        _base_template,
+    ) = tokio::join!(context_fut, history_fut, template_fut);
+
+    // Process Context Stage outcome
+    match context_status {
+        StageStatus::Failed => {
             if let Some(ref mut l) = logger {
                 l.record_stage(
-                    StageLogRecord::new("context", StageStatus::Failed, elapsed)
+                    StageLogRecord::new("context", StageStatus::Failed, context_elapsed)
                         .with_error("injected failure"),
                 );
             }
@@ -223,7 +309,7 @@ pub async fn execute_enhance_pipeline(
             let on_fail = config.stage_on_fail(app, "context");
             if on_fail == OnFail::Abort {
                 if let Some(ref mut l) = logger {
-                    l.finalize("", None, false, ExitCode::Abort.as_i32());
+                    l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                 }
                 return PipelineResult {
                     exit_code: ExitCode::Abort,
@@ -234,31 +320,30 @@ pub async fn execute_enhance_pipeline(
                 };
             }
             failed_stages.push("context (repo inspection failed)".to_string());
-        } else {
-            let summary = collect_repo_summary(cwd);
-            let candidates = extract_candidate_files(&processed_prompt, cwd);
-            repo_summary = Some(summary);
-            candidate_files = candidates;
-            let elapsed = stage_start.elapsed().as_millis() as u64;
+        }
+        StageStatus::Ok => {
             if let Some(ref mut l) = logger {
-                l.record_stage(StageLogRecord::new("context", StageStatus::Ok, elapsed));
+                l.record_stage(StageLogRecord::new(
+                    "context",
+                    StageStatus::Ok,
+                    context_elapsed,
+                ));
             }
         }
-    } else if let Some(ref mut l) = logger {
-        l.record_stage(StageLogRecord::new("context", StageStatus::Disabled, 0));
+        StageStatus::Disabled => {
+            if let Some(ref mut l) = logger {
+                l.record_stage(StageLogRecord::new("context", StageStatus::Disabled, 0));
+            }
+        }
+        _ => {}
     }
 
-    // ──────────────────────────────────────────
-    // Stage 5: History stage
-    // ──────────────────────────────────────────
-    let stage_start = Instant::now();
-    let mut cached_history: Option<String> = None;
-    if config.is_stage_enabled(app, "history") {
-        if hooks.fail_history {
-            let elapsed = stage_start.elapsed().as_millis() as u64;
+    // Process History Stage outcome
+    match history_status {
+        StageStatus::Failed => {
             if let Some(ref mut l) = logger {
                 l.record_stage(
-                    StageLogRecord::new("history", StageStatus::Failed, elapsed)
+                    StageLogRecord::new("history", StageStatus::Failed, history_elapsed)
                         .with_error("injected failure"),
                 );
             }
@@ -266,7 +351,7 @@ pub async fn execute_enhance_pipeline(
             let on_fail = config.stage_on_fail(app, "history");
             if on_fail == OnFail::Abort {
                 if let Some(ref mut l) = logger {
-                    l.finalize("", None, false, ExitCode::Abort.as_i32());
+                    l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                 }
                 return PipelineResult {
                     exit_code: ExitCode::Abort,
@@ -277,19 +362,22 @@ pub async fn execute_enhance_pipeline(
                 };
             }
             failed_stages.push("history (adapter failed / db locked)".to_string());
-        } else {
-            // Read cached summary from history DB
-            if let Ok(db) = pfmt_history::HistoryDb::open_default() {
-                let cwd_str = cwd.to_str();
-                cached_history = db.get_latest_summary(app, cwd_str).ok().flatten();
-            }
-            let elapsed = stage_start.elapsed().as_millis() as u64;
+        }
+        StageStatus::Ok => {
             if let Some(ref mut l) = logger {
-                l.record_stage(StageLogRecord::new("history", StageStatus::Ok, elapsed));
+                l.record_stage(StageLogRecord::new(
+                    "history",
+                    StageStatus::Ok,
+                    history_elapsed,
+                ));
             }
         }
-    } else if let Some(ref mut l) = logger {
-        l.record_stage(StageLogRecord::new("history", StageStatus::Disabled, 0));
+        StageStatus::Disabled => {
+            if let Some(ref mut l) = logger {
+                l.record_stage(StageLogRecord::new("history", StageStatus::Disabled, 0));
+            }
+        }
+        _ => {}
     }
 
     // ──────────────────────────────────────────
@@ -305,6 +393,7 @@ pub async fn execute_enhance_pipeline(
 
     let mut filtered_candidates = candidate_files.clone();
     let mut _needs_history = is_continue;
+    let mut session_kind = pfmt_llm::classify_session_kind_heuristic(&processed_prompt).to_string();
 
     if !skip_network && config.is_stage_enabled(app, "gate") {
         let remaining_budget = total_budget.saturating_sub(start_time.elapsed());
@@ -332,7 +421,7 @@ pub async fn execute_enhance_pipeline(
             let on_fail = config.stage_on_fail(app, "gate");
             if on_fail == OnFail::Abort {
                 if let Some(ref mut l) = logger {
-                    l.finalize("", None, false, ExitCode::Abort.as_i32());
+                    l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                 }
                 return PipelineResult {
                     exit_code: ExitCode::Abort,
@@ -359,6 +448,7 @@ pub async fn execute_enhance_pipeline(
                 Ok(decisions) => {
                     _needs_history = decisions.needs_history;
                     filtered_candidates = decisions.filtered_candidates.clone();
+                    session_kind = decisions.session_kind.clone();
                     if let Some(ref mut l) = logger {
                         l.set_gate_decision(GateLogRecord {
                             needs_history: decisions.needs_history,
@@ -366,6 +456,7 @@ pub async fn execute_enhance_pipeline(
                             injection_risk: decisions.injection_risk,
                             extra_rules_requested: decisions.extra_rules_requested,
                             extra_report_requested: decisions.extra_report_requested,
+                            session_kind: Some(session_kind.clone()),
                             allowed_candidates: decisions.filtered_candidates,
                             probabilities: decisions.probabilities,
                         });
@@ -382,7 +473,7 @@ pub async fn execute_enhance_pipeline(
                     let on_fail = config.stage_on_fail(app, "gate");
                     if on_fail == OnFail::Abort {
                         if let Some(ref mut l) = logger {
-                            l.finalize("", None, false, ExitCode::Abort.as_i32());
+                            l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                         }
                         return PipelineResult {
                             exit_code: ExitCode::Abort,
@@ -442,7 +533,7 @@ pub async fn execute_enhance_pipeline(
             let on_fail = config.stage_on_fail(app, "writer");
             if on_fail == OnFail::Abort {
                 if let Some(ref mut l) = logger {
-                    l.finalize("", None, false, ExitCode::Abort.as_i32());
+                    l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                 }
                 return PipelineResult {
                     exit_code: ExitCode::Abort,
@@ -457,6 +548,7 @@ pub async fn execute_enhance_pipeline(
             let payload_input = PayloadInput {
                 agent: app,
                 mode,
+                session_id: history_src.as_deref().or(app_context.session_id.as_deref()),
                 repo_summary: repo_summary.as_deref(),
                 candidates: &filtered_candidates,
                 history_summary: cached_history.as_deref(),
@@ -501,6 +593,8 @@ pub async fn execute_enhance_pipeline(
                                         ),
                                 );
                             }
+                            let mut output = output;
+                            output.session_kind = Some(session_kind.clone());
                             writer_output = Some(output);
                             writer_model_used = Some(model_name);
                         }
@@ -516,7 +610,7 @@ pub async fn execute_enhance_pipeline(
                             let on_fail = config.stage_on_fail(app, "writer");
                             if on_fail == OnFail::Abort {
                                 if let Some(ref mut l) = logger {
-                                    l.finalize("", None, false, ExitCode::Abort.as_i32());
+                                    l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                                 }
                                 return PipelineResult {
                                     exit_code: ExitCode::Abort,
@@ -541,7 +635,7 @@ pub async fn execute_enhance_pipeline(
                     let on_fail = config.stage_on_fail(app, "writer");
                     if on_fail == OnFail::Abort {
                         if let Some(ref mut l) = logger {
-                            l.finalize("", None, false, ExitCode::Abort.as_i32());
+                            l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                         }
                         return PipelineResult {
                             exit_code: ExitCode::Abort,
@@ -584,7 +678,7 @@ pub async fn execute_enhance_pipeline(
                     let on_fail = config.stage_on_fail(app, "confidence");
                     if on_fail == OnFail::Abort {
                         if let Some(ref mut l) = logger {
-                            l.finalize("", None, false, ExitCode::Abort.as_i32());
+                            l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                         }
                         return PipelineResult {
                             exit_code: ExitCode::Abort,
@@ -627,28 +721,38 @@ pub async fn execute_enhance_pipeline(
                                 let elapsed = confidence_stage_start.elapsed().as_millis() as u64;
                                 confidence_report = Some(report);
                                 if let Some(ref mut l) = logger {
-                                    l.record_stage(StageLogRecord::new("confidence", StageStatus::Ok, elapsed));
+                                    l.record_stage(StageLogRecord::new(
+                                        "confidence",
+                                        StageStatus::Ok,
+                                        elapsed,
+                                    ));
                                 }
                             }
                             Err(e) => {
                                 let elapsed = confidence_stage_start.elapsed().as_millis() as u64;
                                 if let Some(ref mut l) = logger {
                                     l.record_stage(
-                                        StageLogRecord::new("confidence", StageStatus::Failed, elapsed)
-                                            .with_error(&e),
+                                        StageLogRecord::new(
+                                            "confidence",
+                                            StageStatus::Failed,
+                                            elapsed,
+                                        )
+                                        .with_error(&e),
                                     );
                                 }
                                 let on_fail = config.stage_on_fail(app, "confidence");
                                 if on_fail == OnFail::Abort {
                                     if let Some(ref mut l) = logger {
-                                        l.finalize("", None, false, ExitCode::Abort.as_i32());
+                                        l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                                     }
                                     return PipelineResult {
                                         exit_code: ExitCode::Abort,
                                         stdout_content: String::new(),
                                         stderr_status: format!("ABORT: confidence failed: {}", e),
                                         failed_stages: vec![format!("confidence ({})", e)],
-                                        log_path: logger.as_ref().map(|l| l.log_path().to_path_buf()),
+                                        log_path: logger
+                                            .as_ref()
+                                            .map(|l| l.log_path().to_path_buf()),
                                     };
                                 }
                                 failed_stages.push(format!("confidence ({})", e));
@@ -682,7 +786,7 @@ pub async fn execute_enhance_pipeline(
                 let on_fail = config.stage_on_fail(app, "verify");
                 if on_fail == OnFail::Abort {
                     if let Some(ref mut l) = logger {
-                        l.finalize("", None, false, ExitCode::Abort.as_i32());
+                        l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                     }
                     return PipelineResult {
                         exit_code: ExitCode::Abort,
@@ -733,7 +837,7 @@ pub async fn execute_enhance_pipeline(
                         let on_fail = config.stage_on_fail(app, "verify");
                         if on_fail == OnFail::Abort {
                             if let Some(ref mut l) = logger {
-                                l.finalize("", None, false, ExitCode::Abort.as_i32());
+                                l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
                             }
                             return PipelineResult {
                                 exit_code: ExitCode::Abort,
@@ -760,7 +864,7 @@ pub async fn execute_enhance_pipeline(
         let on_fail = config.stage_on_fail(app, "render");
         if on_fail == OnFail::Abort {
             if let Some(ref mut l) = logger {
-                l.finalize("", None, false, ExitCode::Abort.as_i32());
+                l.finalize("", None, false, ExitCode::Abort.as_i32()).await;
             }
             return PipelineResult {
                 exit_code: ExitCode::Abort,
@@ -783,15 +887,37 @@ pub async fn execute_enhance_pipeline(
         None
     };
 
+    let template = ReportTemplate::resolve(config, profile, Some(&session_kind));
     let rendered_xml = match writer_output {
-        Some(ref out) => render(
+        Some(ref out) => render_with_template(
             out,
-            profile,
+            &template,
             degradation.as_ref(),
-            confidence_report.as_ref().map(|v| v.as_slice()),
+            confidence_report.as_deref(),
             config.confidence.threshold,
         ),
-        None => no_llm_wrap_with_degradation(&processed_prompt, profile, degradation.as_ref()),
+        None => {
+            let out = WriterOutput {
+                task: processed_prompt.clone(),
+                context: Vec::new(),
+                relevant_files: Vec::new(),
+                acceptance_criteria: Vec::new(),
+                extra_rules: Vec::new(),
+                extra_report: Vec::new(),
+                assumptions: Vec::new(),
+                out_of_scope: Vec::new(),
+                verify: Vec::new(),
+                session_kind: Some(session_kind.clone()),
+                confidence: Vec::new(),
+            };
+            render_with_template(
+                &out,
+                &template,
+                degradation.as_ref(),
+                None,
+                config.confidence.threshold,
+            )
+        }
     };
 
     let elapsed = stage_start.elapsed().as_millis() as u64;
@@ -815,7 +941,8 @@ pub async fn execute_enhance_pipeline(
             degradation.as_ref().map(|d| d.render_banner()),
             is_degraded,
             exit_code.as_i32(),
-        );
+        )
+        .await;
     }
 
     if let Some(ref deg) = degradation {
@@ -876,6 +1003,7 @@ async fn run_decider(
     Err("no working decider API key available".to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_confidence_check(
     user_prompt: &str,
     app_context: &AppContext,

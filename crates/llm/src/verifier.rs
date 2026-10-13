@@ -71,6 +71,7 @@ mod tests {
             assumptions: vec![],
             out_of_scope: Vec::new(),
             verify: Vec::new(),
+            session_kind: None,
             confidence: Vec::new(),
         };
 
@@ -92,6 +93,7 @@ mod tests {
             assumptions: vec![],
             out_of_scope: Vec::new(),
             verify: Vec::new(),
+            session_kind: None,
             confidence: Vec::new(),
         };
 

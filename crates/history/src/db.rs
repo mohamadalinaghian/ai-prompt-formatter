@@ -248,6 +248,16 @@ impl HistoryDb {
         Ok(())
     }
 
+    /// Fetches the session_id string for a given primary key.
+    pub fn get_session_id(&self, session_id_pk: i64) -> Result<Option<String>, DbError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT session_id FROM sessions WHERE id = ?1")?;
+        let session_id: Option<String> = stmt
+            .query_row(params![session_id_pk], |row| row.get(0))
+            .optional()?;
+        Ok(session_id)
+    }
+
     /// Enqueues a compact job with built-in debouncing (only 1 queued job allowed per session).
     pub fn enqueue_compact_job(&self, session_id_pk: i64) -> Result<i64, DbError> {
         let conn = self.conn.lock().unwrap();

@@ -29,6 +29,7 @@ fn test_validation_success() {
         assumptions: vec!["assume X".to_string()],
         out_of_scope: Vec::new(),
         verify: Vec::new(),
+        session_kind: None,
         confidence: Vec::new(),
     };
     assert!(out.validate().is_ok());
@@ -47,6 +48,7 @@ fn test_validation_failure_task_too_long() {
         assumptions: vec![],
         out_of_scope: Vec::new(),
         verify: Vec::new(),
+        session_kind: None,
         confidence: Vec::new(),
     };
     let err = out.validate().unwrap_err();
@@ -65,6 +67,7 @@ fn test_render_and_xml_escaping() {
         assumptions: vec![],
         out_of_scope: Vec::new(),
         verify: Vec::new(),
+        session_kind: None,
         confidence: Vec::new(),
     };
     let profile = sample_profile();
@@ -111,6 +114,7 @@ fn test_degradation_banner() {
         assumptions: vec![],
         out_of_scope: Vec::new(),
         verify: Vec::new(),
+        session_kind: None,
         confidence: Vec::new(),
     };
     let xml = render(&out, &sample_profile(), Some(&deg), None, 0.6);
@@ -179,4 +183,149 @@ fn test_schemars_json_schema_generation() {
     assert!(props.contains_key("task"));
     assert!(props.contains_key("acceptance_criteria"));
     assert!(props.contains_key("relevant_files"));
+}
+
+#[test]
+fn test_render_read_only_skips_file_change_report() {
+    let out = WriterOutput {
+        task: "Explain how authentication works in this repo".to_string(),
+        context: vec!["Auth uses JWT".to_string()],
+        relevant_files: vec!["src/auth.rs".to_string()],
+        acceptance_criteria: vec!["Explanation is clear".to_string()],
+        extra_rules: vec![],
+        extra_report: vec![],
+        assumptions: vec![],
+        out_of_scope: vec![],
+        verify: vec![],
+        session_kind: Some("read-only".to_string()),
+        confidence: vec![],
+    };
+    let profile = sample_profile();
+    let xml = render(&out, &profile, None, None, 0.6);
+
+    // Read-only must NOT ask for file changes or diffs in report
+    assert!(!xml.contains("Key Changes"));
+    assert!(xml.contains("Key Findings"));
+    assert!(xml.contains("<rules>"));
+    assert!(xml.contains("Read-only analysis"));
+}
+
+#[test]
+fn test_render_write_enabled_includes_full_report() {
+    let out = WriterOutput {
+        task: "Add login endpoint".to_string(),
+        context: vec![],
+        relevant_files: vec!["src/login.rs".to_string()],
+        acceptance_criteria: vec!["POST /login returns token".to_string()],
+        extra_rules: vec![],
+        extra_report: vec![],
+        assumptions: vec![],
+        out_of_scope: vec![],
+        verify: vec![],
+        session_kind: Some("write-enabled".to_string()),
+        confidence: vec![],
+    };
+    let profile = sample_profile();
+    let xml = render(&out, &profile, None, None, 0.6);
+
+    // Write-enabled retains standard report with Key Changes
+    assert!(xml.contains("Key Changes"));
+    assert!(xml.contains("Remaining Tasks"));
+}
+
+#[test]
+fn test_block_context_omitted_when_empty_and_included_when_present() {
+    let mut out = WriterOutput {
+        task: "Some task".to_string(),
+        context: vec![],
+        relevant_files: vec![],
+        acceptance_criteria: vec!["AC 1".to_string()],
+        extra_rules: vec![],
+        extra_report: vec![],
+        assumptions: vec![],
+        out_of_scope: vec![],
+        verify: vec![],
+        session_kind: None,
+        confidence: vec![],
+    };
+    let profile = sample_profile();
+
+    let xml_empty = render(&out, &profile, None, None, 0.6);
+    assert!(!xml_empty.contains("<context>"));
+
+    out.context = vec!["Fact 1".to_string()];
+    let xml_present = render(&out, &profile, None, None, 0.6);
+    assert!(xml_present.contains("<context>\n- Fact 1\n</context>"));
+}
+
+#[test]
+fn test_block_scope_omitted_when_empty_and_included_when_present() {
+    let mut out = WriterOutput {
+        task: "Some task".to_string(),
+        context: vec![],
+        relevant_files: vec![],
+        acceptance_criteria: vec!["AC 1".to_string()],
+        extra_rules: vec![],
+        extra_report: vec![],
+        assumptions: vec![],
+        out_of_scope: vec![],
+        verify: vec![],
+        session_kind: None,
+        confidence: vec![],
+    };
+    let profile = sample_profile();
+
+    let xml_empty = render(&out, &profile, None, None, 0.6);
+    assert!(!xml_empty.contains("<scope>"));
+
+    out.relevant_files = vec!["src/lib.rs".to_string()];
+    let xml_files = render(&out, &profile, None, None, 0.6);
+    assert!(xml_files.contains("<scope>\n<relevant_files>src/lib.rs</relevant_files>\n</scope>"));
+
+    out.relevant_files = vec![];
+    out.out_of_scope = vec!["Avoid editing tests".to_string()];
+    let xml_oos = render(&out, &profile, None, None, 0.6);
+    assert!(xml_oos.contains("<scope>\n<out_of_scope>Avoid editing tests</out_of_scope>\n</scope>"));
+}
+
+#[test]
+fn test_block_verify_omitted_when_empty_and_included_when_present() {
+    let mut out = WriterOutput {
+        task: "Some task".to_string(),
+        context: vec![],
+        relevant_files: vec![],
+        acceptance_criteria: vec!["AC 1".to_string()],
+        extra_rules: vec![],
+        extra_report: vec![],
+        assumptions: vec![],
+        out_of_scope: vec![],
+        verify: vec![],
+        session_kind: None,
+        confidence: vec![],
+    };
+    let profile = sample_profile();
+
+    let xml_empty = render(&out, &profile, None, None, 0.6);
+    assert!(!xml_empty.contains("<verify>"));
+
+    out.verify = vec!["cargo test".to_string()];
+    let xml_present = render(&out, &profile, None, None, 0.6);
+    assert!(xml_present.contains("<verify>\ncargo test\n</verify>"));
+}
+
+#[test]
+fn test_report_template_resolve_from_config() {
+    use pfmt_core::render::ReportTemplate;
+    use pfmt_core::Config;
+
+    let config = Config::load();
+    let profile = sample_profile();
+
+    let read_only_tmpl = ReportTemplate::resolve(&config, &profile, Some("read-only"));
+    assert!(read_only_tmpl.skip_file_change_report);
+    assert!(read_only_tmpl.rules.contains("Read-only analysis"));
+
+    let write_tmpl = ReportTemplate::resolve(&config, &profile, Some("write-enabled"));
+    assert!(!write_tmpl.skip_file_change_report);
+    assert!(write_tmpl.report.contains("Key Changes"));
 }

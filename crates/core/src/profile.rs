@@ -23,12 +23,15 @@ pub struct SectionConfig {
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct ProfileToml {
+    #[serde(default)]
+    pub kind: Option<String>,
     pub rules: SectionConfig,
     pub report: SectionConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
+    pub kind: Option<String>,
     pub rules: String,
     pub report: String,
 }
@@ -44,14 +47,21 @@ pub enum ProfileError {
 impl Profile {
     pub fn new(rules: impl Into<String>, report: impl Into<String>) -> Self {
         Self {
+            kind: None,
             rules: rules.into(),
             report: report.into(),
         }
     }
 
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
     pub fn from_toml_str(toml_content: &str) -> Result<Self, ProfileError> {
         let parsed: ProfileToml = toml::from_str(toml_content)?;
         Ok(Self {
+            kind: parsed.kind,
             rules: parsed.rules.text.trim().to_string(),
             report: parsed.report.text.trim().to_string(),
         })

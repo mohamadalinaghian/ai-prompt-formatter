@@ -8,7 +8,9 @@ pub mod render;
 pub mod types;
 
 pub use banner::{Degradation, ExitCode};
-pub use config::{AppConfig, BudgetConfig, Config, ConfigError, OnFail, StageConfig};
+pub use config::{
+    AppConfig, BudgetConfig, Config, ConfigError, OnFail, StageConfig, TemplateConfig,
+};
 pub use keys::{clear_key_cache, resolve_api_key, KeyError};
 pub use log::{
     slugify_topic, ExecutionLog, GateLogRecord, StageLogRecord, StageStatus, VerifierLogRecord,
@@ -16,8 +18,8 @@ pub use log::{
 };
 pub use profile::{Profile, ProfileError};
 pub use redact::redact_secrets;
-pub use render::{render, xml_escape};
-pub use types::{ValidationError, WriterOutput, ItemConfidence};
+pub use render::{render, render_with_template, xml_escape, ReportTemplate};
+pub use types::{ItemConfidence, ValidationError, WriterOutput};
 
 /// Context gathered from the frontmost app (probe stage).
 /// Every later stage uses whichever fields exist; missing fields are simply omitted.
@@ -53,6 +55,7 @@ pub fn no_llm_wrap_with_degradation(
         assumptions: Vec::new(),
         out_of_scope: Vec::new(),
         verify: Vec::new(),
+        session_kind: None,
         confidence: Vec::new(),
     };
     render(&output, profile, degradation, None, 0.6)

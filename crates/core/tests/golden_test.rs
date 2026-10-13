@@ -33,6 +33,7 @@ fn test_golden_standard_output() {
         assumptions: vec![],
         out_of_scope: Vec::new(),
         verify: Vec::new(),
+        session_kind: None,
         confidence: Vec::new(),
     };
 
@@ -90,6 +91,7 @@ fn test_golden_degraded_output() {
         assumptions: vec![],
         out_of_scope: Vec::new(),
         verify: Vec::new(),
+        session_kind: None,
         confidence: Vec::new(),
     };
 

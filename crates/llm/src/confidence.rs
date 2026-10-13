@@ -104,7 +104,10 @@ impl ConfidenceChecker for JevConfidence {
                     item.text
                 )
             } else {
-                format!("Is this statement directly supported by the state? Statement: {}", item.text)
+                format!(
+                    "Is this statement directly supported by the state? Statement: {}",
+                    item.text
+                )
             };
 
             questions.insert(

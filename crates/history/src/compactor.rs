@@ -3,6 +3,7 @@ use crate::db::HistoryDb;
 use pfmt_core::{redact_secrets, resolve_api_key, Config};
 use pfmt_llm::{clean_json_str, GroqClient, PromptLoader};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -90,6 +91,10 @@ impl CompactorWorker {
         self.db
             .update_summary(session_id_pk, &summary, &model_used, "v1")?;
 
+        if let Ok(Some(session_id)) = self.db.get_session_id(session_id_pk) {
+            let _ = write_session_summary_file(&default_summaries_dir(), &session_id, &summary);
+        }
+
         Ok(summary)
     }
 
@@ -100,7 +105,9 @@ impl CompactorWorker {
         turns: &[Turn],
     ) -> Result<(), CompactorError> {
         match self.compact_session(job.session_ref, turns).await {
-            Ok(_) => {
+            Ok(summary) => {
+                let _ =
+                    write_session_summary_file(&default_summaries_dir(), &job.session_id, &summary);
                 self.db.finish_job(job.id)?;
                 Ok(())
             }
@@ -110,4 +117,33 @@ impl CompactorWorker {
             }
         }
     }
+}
+
+/// Resolves the default summaries directory: `~/.config/pfmt/summaries`.
+pub fn default_summaries_dir() -> PathBuf {
+    dirs::config_dir()
+        .map(|d| d.join("pfmt").join("summaries"))
+        .unwrap_or_else(|| PathBuf::from(".pfmt").join("summaries"))
+}
+
+/// Writes a session summary markdown file: `<session_id>.summary.md`.
+pub fn write_session_summary_file(
+    summaries_dir: &Path,
+    session_id: &str,
+    summary: &str,
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(summaries_dir)?;
+    let safe_id: String = session_id
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let file_path = summaries_dir.join(format!("{}.summary.md", safe_id));
+    std::fs::write(&file_path, summary)?;
+    Ok(file_path)
 }

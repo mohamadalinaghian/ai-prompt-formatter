@@ -42,6 +42,10 @@ pub struct WriterOutput {
     #[serde(default)]
     pub verify: Vec<String>,
 
+    /// Session kind (e.g. "read-only", "write-enabled").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_kind: Option<String>,
+
     /// Confidence report from Jev scoring of LLM-written items.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub confidence: Vec<ItemConfidence>,

@@ -134,3 +134,39 @@ fn test_antigravity_live_brain_scan() {
         assert!(!s.turns.is_empty());
     }
 }
+
+#[test]
+fn test_write_session_summary_file_and_get_session_id() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test_summary.db");
+    let db = HistoryDb::open_path(&db_path).expect("open db");
+
+    let session_pk = db
+        .upsert_session(
+            "Antigravity",
+            "session-xyz-456",
+            Some("Antigravity"),
+            Some("gemini"),
+            Some("/path/to/project"),
+            None,
+            None,
+        )
+        .expect("upsert");
+
+    let session_id = db.get_session_id(session_pk).expect("get_session_id");
+    assert_eq!(session_id, Some("session-xyz-456".to_string()));
+
+    let summaries_dir = dir.path().join("summaries");
+    let summary_text = "Goal: Fix compiler error in pipeline. Decided to use tokio::join.";
+    let file_path =
+        pfmt_history::write_session_summary_file(&summaries_dir, "session-xyz-456", summary_text)
+            .expect("write summary file");
+
+    assert!(file_path.exists());
+    let contents = std::fs::read_to_string(&file_path).expect("read summary file");
+    assert_eq!(contents, summary_text);
+    assert_eq!(
+        file_path.file_name().unwrap().to_str().unwrap(),
+        "session-xyz-456.summary.md"
+    );
+}

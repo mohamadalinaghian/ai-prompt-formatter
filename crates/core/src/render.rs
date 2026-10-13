@@ -25,10 +25,91 @@ fn confidence_marker(score: Option<f64>, threshold: f64) -> String {
     }
 }
 
+/// Report template defining the rules and report format instructions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportTemplate {
+    pub rules: String,
+    pub report: String,
+    pub skip_file_change_report: bool,
+}
+
+impl ReportTemplate {
+    pub fn new(
+        rules: impl Into<String>,
+        report: impl Into<String>,
+        skip_file_change_report: bool,
+    ) -> Self {
+        Self {
+            rules: rules.into(),
+            report: report.into(),
+            skip_file_change_report,
+        }
+    }
+
+    pub fn from_profile(profile: &Profile, is_read_only: bool) -> Self {
+        if is_read_only {
+            Self {
+                rules: "- Be EXTREMELY concise. The user skims text. Do not explain how code works unless asked.\n- Read-only analysis: do NOT make code edits or file modifications.\n- Ground all explanations in the codebase.".to_string(),
+                report: "KEEP YOUR RESPONSE EXTREMELY SHORT.\n1. 🔍 **Key Findings / Answers**: (bullet points, max 1 line each)\n2. ⚠️ **Important / Blockers**: (assumptions, blockers, or critical decisions)\n3. 📋 **Remaining Tasks / Next Steps**: (actionable items)".to_string(),
+                skip_file_change_report: true,
+            }
+        } else {
+            Self {
+                rules: profile.rules.clone(),
+                report: profile.report.clone(),
+                skip_file_change_report: false,
+            }
+        }
+    }
+
+    pub fn resolve(
+        config: &crate::config::Config,
+        profile: &Profile,
+        session_kind: Option<&str>,
+    ) -> Self {
+        let kind = session_kind
+            .or(profile.kind.as_deref())
+            .unwrap_or("default");
+
+        let normalized_kind = match kind {
+            "read-only" | "read_only" => "read_only",
+            "write-enabled" | "write_enabled" => "default",
+            other => other,
+        };
+
+        if let Some(t) = config
+            .templates
+            .get(normalized_kind)
+            .or_else(|| config.templates.get(kind))
+        {
+            Self::new(&t.rules, &t.report, t.skip_file_change_report)
+        } else {
+            let is_read_only = normalized_kind == "read_only";
+            Self::from_profile(profile, is_read_only)
+        }
+    }
+}
+
 /// Renders a WriterOutput into the standardized XML prompt format.
 pub fn render(
     output: &WriterOutput,
     profile: &Profile,
+    degradation: Option<&Degradation>,
+    confidence: Option<&[ItemConfidence]>,
+    threshold: f64,
+) -> String {
+    let is_read_only = output.session_kind.as_deref() == Some("read-only")
+        || output.session_kind.as_deref() == Some("read_only")
+        || profile.kind.as_deref() == Some("read-only")
+        || profile.kind.as_deref() == Some("read_only");
+    let template = ReportTemplate::from_profile(profile, is_read_only);
+    render_with_template(output, &template, degradation, confidence, threshold)
+}
+
+/// Renders a WriterOutput using a specified ReportTemplate.
+pub fn render_with_template(
+    output: &WriterOutput,
+    template: &ReportTemplate,
     degradation: Option<&Degradation>,
     confidence: Option<&[ItemConfidence]>,
     threshold: f64,
@@ -64,8 +145,7 @@ pub fn render(
     // 3. <task>
     let task_marker = confidence
         .and_then(|c| c.iter().find(|ic| ic.section == "task" && ic.index == 0))
-        .and_then(|ic| Some(confidence_marker(ic.score, threshold)))
-        
+        .map(|ic| confidence_marker(ic.score, threshold))
         .unwrap_or_default();
     let task_escaped = xml_escape(output.task.trim());
     sections.push(format!("<task>\n{}{}\n</task>", task_marker, task_escaped));
@@ -79,9 +159,11 @@ pub fn render(
             let trimmed = a.trim();
             let escaped = xml_escape(trimmed);
             let marker = confidence
-                .and_then(|c| c.iter().find(|ic| ic.section == "acceptance_criteria" && ic.index == i))
-                .and_then(|ic| Some(confidence_marker(ic.score, threshold)))
-                
+                .and_then(|c| {
+                    c.iter()
+                        .find(|ic| ic.section == "acceptance_criteria" && ic.index == i)
+                })
+                .map(|ic| confidence_marker(ic.score, threshold))
                 .unwrap_or_default();
             if escaped.starts_with("- ") || escaped.starts_with("* ") {
                 format!("{}{}", marker, escaped)
@@ -108,8 +190,7 @@ pub fn render(
                 let escaped = xml_escape(trimmed);
                 let marker = confidence
                     .and_then(|c| c.iter().find(|ic| ic.section == "context" && ic.index == i))
-                    .and_then(|ic| Some(confidence_marker(ic.score, threshold)))
-                    
+                    .map(|ic| confidence_marker(ic.score, threshold))
                     .unwrap_or_default();
                 if escaped.starts_with("- ") || escaped.starts_with("* ") {
                     format!("{}{}", marker, escaped)
@@ -134,13 +215,15 @@ pub fn render(
                     let escaped = xml_escape(f.trim());
                     let marker = confidence
                         .and_then(|c| c.iter().find(|ic| ic.section == "scope" && ic.index == i))
-                        .and_then(|ic| Some(confidence_marker(ic.score, threshold)))
-                        
+                        .map(|ic| confidence_marker(ic.score, threshold))
                         .unwrap_or_default();
                     format!("{}{}", marker, escaped)
                 })
                 .collect();
-            scope_parts.push(format!("<relevant_files>{}</relevant_files>", files.join(", ")));
+            scope_parts.push(format!(
+                "<relevant_files>{}</relevant_files>",
+                files.join(", ")
+            ));
         }
         if !output.out_of_scope.is_empty() {
             let items: Vec<String> = output
@@ -152,8 +235,7 @@ pub fn render(
                     let idx = output.relevant_files.len() + i;
                     let marker = confidence
                         .and_then(|c| c.iter().find(|ic| ic.section == "scope" && ic.index == idx))
-                        .and_then(|ic| Some(confidence_marker(ic.score, threshold)))
-                        
+                        .map(|ic| confidence_marker(ic.score, threshold))
                         .unwrap_or_default();
                     format!("{}{}", marker, escaped)
                 })
@@ -163,8 +245,8 @@ pub fn render(
         sections.push(format!("<scope>\n{}\n</scope>", scope_parts.join("\n")));
     }
 
-    // 7. <rules> (fixed profile rules + extra_rules)
-    let mut rules_content = profile.rules.trim().to_string();
+    // 7. <rules> (template rules + extra_rules)
+    let mut rules_content = template.rules.trim().to_string();
     if !output.extra_rules.is_empty() {
         for rule in &output.extra_rules {
             let trimmed = rule.trim();
@@ -191,8 +273,7 @@ pub fn render(
                 let escaped = xml_escape(s.trim());
                 let marker = confidence
                     .and_then(|c| c.iter().find(|ic| ic.section == "verify" && ic.index == i))
-                    .and_then(|ic| Some(confidence_marker(ic.score, threshold)))
-                    
+                    .map(|ic| confidence_marker(ic.score, threshold))
                     .unwrap_or_default();
                 format!("{}{}", marker, escaped)
             })
@@ -200,8 +281,8 @@ pub fn render(
         sections.push(format!("<verify>\n{}\n</verify>", items.join("\n")));
     }
 
-    // 9. <report> (fixed profile report + extra_report)
-    let mut report_content = profile.report.trim().to_string();
+    // 9. <report> (template report + extra_report)
+    let mut report_content = template.report.trim().to_string();
     if !output.extra_report.is_empty() {
         for rep in &output.extra_report {
             let trimmed = rep.trim();
